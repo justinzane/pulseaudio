@@ -121,9 +121,10 @@ struct userdata {
 static void biquad_stage(struct biquad_factors *bqfs,
                            struct biquad_data *bqdt,
                            double src) {
-    (*bqdt).y0 =     src * (*bqfs).a0 + (*bqdt).w1 * (*bqfs).a1 +
-              (*bqdt).w2 * (*bqfs).a2 - (*bqdt).y1 * (*bqfs).b1 -
-              (*bqdt).y2 * (*bqfs).b2;
+    //#y0= (b0 * x0 + b1 * x1 + b2 * x2) − (a1 * y1 + a2 * y2);
+    (*bqdt).y0 =     src * (*bqfs).b0 + (*bqdt).w1 * (*bqfs).b1 +
+              (*bqdt).w2 * (*bqfs).b2 - ((*bqdt).y1 * (*bqfs).a1 +
+              (*bqdt).y2 * (*bqfs).a2);
     (*bqdt).w2 = (*bqdt).w1;
     (*bqdt).w1 = (*bqdt).w0;
     (*bqdt).w0 = src;
