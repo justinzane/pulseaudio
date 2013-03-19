@@ -32,3 +32,8 @@ ltmain.sh
 missing
 mkinstalldirs
 stamp-*
+.project
+.cproject
+.autotoolspatches
+doxygen/doxygen-warn.log
+patches/justinzane-lfe-01.patch
