@@ -1077,6 +1077,7 @@ modlibexec_LTLIBRARIES += \
 		module-remap-source.la \
 		module-ladspa-sink.la \
 		module-tunnel-sink.la \
+		module-lfe-lp.la \
 		module-tunnel-source.la \
 		module-position-event-sounds.la \
 		module-augment-properties.la \
@@ -1089,7 +1090,7 @@ modlibexec_LTLIBRARIES += \
 		module-switch-on-port-available.la \
 		module-filter-apply.la \
 		module-filter-heuristics.la \
-		module-role-ducking.la
+		module-role-ducking.la 
 
 if HAVE_ESOUND
 modlibexec_LTLIBRARIES += \
@@ -1342,6 +1343,7 @@ SYMDEF_FILES = \
 		module-remap-sink-symdef.h \
 		module-remap-source-symdef.h \
 		module-ladspa-sink-symdef.h \
+		module-lfe-lp-symdef.h \
 		module-equalizer-sink-symdef.h \
 		module-match-symdef.h \
 		module-tunnel-sink-symdef.h \
@@ -1604,6 +1606,10 @@ if HAVE_DBUS
 module_ladspa_sink_la_CFLAGS += $(DBUS_CFLAGS)
 module_ladspa_sink_la_LIBADD += $(DBUS_LIBS)
 endif
+
+module_lfe_lp_la_SOURCES = modules/module-lfe-lp.c
+module_lfe_lp_la_LDFLAGS = $(MODULE_LDFLAGS)
+module_lfe_lp_la_LIBADD = $(MODULE_LIBADD) $(LIBLTDL)
 
 module_equalizer_sink_la_SOURCES = modules/module-equalizer-sink.c
 module_equalizer_sink_la_CFLAGS = $(AM_CFLAGS) $(SERVER_CFLAGS) $(DBUS_CFLAGS) $(FFTW_CFLAGS)
