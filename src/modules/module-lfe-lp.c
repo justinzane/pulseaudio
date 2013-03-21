@@ -108,8 +108,6 @@ struct userdata {
     struct biquad_data *bqdt;
     struct monopole_factors *mpfs;
     struct monopole_data *mpdt;
-    //debugging
-    FILE *logfile;
 };
 
 /**
@@ -658,10 +656,6 @@ int pa__init(pa_module *m) {
     u->mpfs = &mpfs;
     u->mpdt = &mpdt;
 
-    // TODO: debugging, delete
-    u->logfile = fopen("/home/justin/tmp/logfile.pcm","w");
-    setvbuf(u->logfile, NULL, _IOFBF, BUFSIZ);
-
     // get, validate and assign lowpass cutoff freq
     u->lpfreq = atof(pa_modargs_get_value(ma, "lpfreq", "100.0"));
     if (u->lpfreq < MIN_CUTOFF_FREQ) {
@@ -680,11 +674,11 @@ int pa__init(pa_module *m) {
     u->poles = atoi(pa_modargs_get_value(ma, "lppoles", "1"));
     if (u->poles < MIN_POLES) {
         pa_log ("JZ: %s[%d] poles must be from 1-10.", __FILE__, __LINE__);
-        u->poles = 1;
+        u->poles = MIN_POLES;
     }
     if (u->poles > MAX_POLES) {
         pa_log ("JZ: %s[%d] poles must be from 1-10.", __FILE__, __LINE__);
-        u->poles = 10;
+        u->poles = MAX_POLES;
     }
     pa_log_debug("JZ: %s[%d] poles=%d\n", __FILE__, __LINE__, u->poles);
 
@@ -880,10 +874,6 @@ void pa__done(pa_module*m) {
 
     if (!(u = m->userdata))
         return;
-
-    // TODO: delete, debugging
-    fflush(u->logfile);
-    fclose(u->logfile);
 
     /* See comments in sink_input_kill_cb() above regarding
      * destruction order! */
