@@ -43,3 +43,4 @@ patches/justinzane-lfe-01.patch
 .pydevproject
 .settings
 *.pcm
+pytests/output/*
