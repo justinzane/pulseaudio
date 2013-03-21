@@ -37,3 +37,9 @@ stamp-*
 .autotoolspatches
 doxygen/doxygen-warn.log
 patches/justinzane-lfe-01.patch
+.autotools
+.cproject
+.project
+.pydevproject
+.settings
+*.pcm
