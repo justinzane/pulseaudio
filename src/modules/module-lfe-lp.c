@@ -25,6 +25,7 @@
 
 #include <stdio.h>
 #include <math.h>
+#include <time.h>
 
 #include <pulse/gccmacro.h>
 #include <pulse/xmalloc.h>
@@ -42,24 +43,20 @@
 #include <pulsecore/ltdl-helper.h>
 
 #include "module-lfe-lp-symdef.h"
+
+// TODO: Why am I defined here? Shouldn't I come from pulse/pulsecore?
 #define MEMBLOCKQ_MAXLENGTH (16*1024*1024)
 #ifndef PI
-#define PI 3.1415926535897932384626433
+    #define PI 3.1415926535897932384626433
 #endif
-#define MAX_POLES 10
-#define MIN_POLES 1
 #define MIN_CUTOFF_FREQ 20.0
 #define MAX_CUTOFF_FREQ 500.0
 
-typedef struct monopole_factors {
-    double a0;
-} monopole_factors;
-
-typedef struct monopole_data {
-    double h0;
-    double h1;
-} monopole_data;
-
+/**
+ * \struct biquad_factors
+ * \brief  holds biquad filter coefficients/factors for a specific filter type
+ * \url    http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
+ */
 typedef struct biquad_factors {
     double a0;
     double a1;
@@ -69,6 +66,11 @@ typedef struct biquad_factors {
     double b2;
 } biquad_factors;
 
+/**
+ * \struct biquad_data
+ * \brief  holds one iteration of biquad filter history data
+ * \url    http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
+ */
 typedef struct biquad_data{
     double y0;
     double y1;
@@ -89,10 +91,10 @@ PA_MODULE_USAGE( _("sink_name=<name for the sink> "
         "sink_properties=<properties for the sink> "
         "master=<name of sink to filter> "
         "lpfreq=low pass cutoff freq 50-500 Hz"
-        "lppoles=<number of poles in filter>"
         "use_volume_sharing=<yes or no> "
         "force_flat_volume=<yes or no> " ));
 
+/** \def persistent user data structure */
 struct userdata {
     pa_module *module;
     pa_bool_t autoloaded;
@@ -101,122 +103,122 @@ struct userdata {
     pa_memblockq *memblockq;
     pa_bool_t auto_desc;
     pa_sample_spec sample_spec;
+    /** \def corner/cutoff frequency, user defined */
     double lpfreq;
-    unsigned int poles;
-    unsigned int lfeidx;
-    struct biquad_factors *bqfs;
-    struct biquad_data *bqdt;
-    struct monopole_factors *mpfs;
-    struct monopole_data *mpdt;
+    /** \defgroup lowpass, highpass and allpass coefficients, respectively */
+    struct biquad_factors *lpfs, *hpfs, *apfs;
+    /** \defgroup history data for the various filters */
+    struct biquad_data *lpdt, *hpdt, *apdt;
+    /** \def map of channels index to 'l','h' or 'a' to indicate filter type */
+    char filter_map[PA_CHANNELS_MAX];
 };
 
 /**
- * \brief calculate biquad butterworth second order lowpass
- * \param [in]      bqfs    polynomial factors calculated before
- * \param [in, out] data    history data
- * \param [in]      src     input sample
+ * \brief do the filtering
+ * \param [in]  bqdt    the biquad history data
+ * \param [in]  bqfs    the filter factors
+ * \param [in]  src     the input sample
+ * \return              the filtered sample
  */
-static void biquad_stage(struct biquad_factors *bqfs,
-                           struct biquad_data *bqdt,
-                           double src) {
-    //#y0= (b0 * x0 + b1 * x1 + b2 * x2) − (a1 * y1 + a2 * y2);
-    (*bqdt).y0 =     src * (*bqfs).b0 + (*bqdt).w1 * (*bqfs).b1 +
-              (*bqdt).w2 * (*bqfs).b2 - ((*bqdt).y1 * (*bqfs).a1 +
-              (*bqdt).y2 * (*bqfs).a2);
+static float biquad(struct biquad_data *bqdt, struct biquad_factors bqfs,
+                   float *src) {
+    //#y0= (b0 * x0 + b1 * x1 + b2 * x2) −
+    //               (a1 * y1 + a2 * y2);
+    (*bqdt).w0 = (double)*src;
+    (*bqdt).y0 = (*bqdt).w0 * bqfs.b0 +  (*bqdt).w1 * bqfs.b1 + (*bqdt).w2 * bqfs.b2
+                                - ((*bqdt).y1 * bqfs.a1 + (*bqdt).y2 * bqfs.a2);
+    //TODO: Handle channels and rewind.
     (*bqdt).w2 = (*bqdt).w1;
     (*bqdt).w1 = (*bqdt).w0;
-    (*bqdt).w0 = src;
     (*bqdt).y2 = (*bqdt).y1;
     (*bqdt).y1 = (*bqdt).y0;
+
+    return((float)(*bqdt).y0);
 }
 
 /**
- * \brief calculates the first order RC lowpass
- * \param [in]      mpfs  the factor as previously calculated
- * \param [in/out]  mpdt  the history data
- * \param [in]      src   the input sample
- */
-static void monopole_stage(pa_sink *sink,
-                           double src) {
-    struct userdata *u;
-    pa_sink_assert_ref(sink);
-    pa_assert_se(u = sink->userdata);
-
-    u->mpdt->h0 = u->mpdt->h1 + u->mpfs->a0 * (src - u->mpdt->h1);
-    u->mpdt->h1 = u->mpdt->h0;
-}
-
-/**
- * \brief do the low pass filtering
- * \param [in]  sink    this sink
- * \param [in]  src     the input sample
- * \param [out] dst     the filtered sample
- */
-static void do_filter(pa_sink *sink,
-                      float *src,
-                      float *dst) {
-    struct userdata         *u;
-    static unsigned int     poles;
-    double           sample;
-    pa_sink_assert_ref(sink);
-    pa_assert_se(u = sink->userdata);
-
-    poles = u->poles;
-    sample = (double)*src;
-
-    if ((poles % 2) == 1) {
-        poles -= 1;
-        monopole_stage(sink, sample);
-        sample = u->mpdt->h0;
-    }
-    while (poles >= 2) {
-        poles -= 2;
-        biquad_stage(u->bqfs, u->bqdt, sample);
-        sample = u->bqdt->y0;
-    }
-    *dst = (float)sample;
-}
-/**
- * \brief function to calculate filter factors
+ * \brief   function to calculate filter factors
+ * \url     http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
  */
 static void calc_filter_factors(pa_sink *sink) {
     struct userdata *u;
-    double dt,rc,w0,Q,alpha;
+    double w0,Q,alpha;
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
 
-    // for monopole
-    dt = 1.0 / (double)u->sample_spec.rate;
-    rc = 1.0 / (u->lpfreq * 2.0 * PI);
-    u->mpfs->a0 = dt / (dt + rc);
-
-    // for biquad
     w0 = 2.0 * PI * u->lpfreq / (double)u->sample_spec.rate;
     Q = sqrt(2.0)/2.0;
     alpha = sin(w0) / (2.0 * Q);
 
-    u->bqfs->a0 = 1.0 + alpha;
+
+    //    LPF:        H(s) = 1 / (s^2 + s/Q + 1)
+    //                a0 =   1 + alpha
+    //                a1 =  -2*cos(w0)
+    //                a2 =   1 - alpha
+    //                b0 =  (1 - cos(w0))/2
+    //                b1 =  (1 - cos(w0))
+    //                b2 =  (1 - cos(w0))/2
+    u->lpfs->a0 = (1.0 + alpha);
     // note that we normalize by a0 from here
-    u->bqfs->a1 = (-2.0 * cos(w0)) / u->bqfs->a0;
-    u->bqfs->a2 = (1.0 - alpha) / u->bqfs->a0;
-    u->bqfs->b0 = ((1.0 - cos(w0))/2.0) / u->bqfs->a0;
-    u->bqfs->b1 = ((1.0 - cos(w0))) / u->bqfs->a0;
-    u->bqfs->b2 = ((1.0 - cos(w0))/2.0) / u->bqfs->a0;
-    u->bqfs->a0 = 1.0;
+    u->lpfs->a1 = (-2.0 * cos(w0))        / u->lpfs->a0;
+    u->lpfs->a2 = (1.0 - alpha)           / u->lpfs->a0;
+    u->lpfs->b0 = ((1.0 - cos(w0)) / 2.0) / u->lpfs->a0;
+    u->lpfs->b1 = ((1.0 - cos(w0))      ) / u->lpfs->a0;
+    u->lpfs->b2 = ((1.0 - cos(w0)) / 2.0) / u->lpfs->a0;
+    u->lpfs->a0 = 1.0;
 
-    pa_log_debug ("JZ: %s[%d]\n"
-                  "\tdt=%0.8f, rc=%0.8f\n",
-                  __FILE__, __LINE__, dt, rc);
-    pa_log_debug ("\tw0=%0.8f, Q=%0.8f, alpha=%0.8f", w0, Q, alpha);
-    pa_log_debug ("\tmonopole_factors\n"
-                  "\ta0=[%0.8f]\n", u->mpfs->a0);
-    pa_log_debug ("\tbiquad_factors\n"
-                  "\t[b0, b1, b2]=[%0.8f, %0.8f, %0.8f]\n"
-                  "\t[a0, a1, a2]=[%0.8f, %0.8f, %0.8f]\n",
-                  u->bqfs->b0, u->bqfs->b1, u->bqfs->b2,
-                  u->bqfs->a0, u->bqfs->a1, u->bqfs->a2
-                 );
+    //    HPF:        H(s) = s^2 / (s^2 + s/Q + 1)
+    //                a0 =   1 + alpha
+    //                a1 =  -2*cos(w0)
+    //                a2 =   1 - alpha
+    //                b0 =  (1 + cos(w0))/2
+    //                b1 = -(1 + cos(w0))
+    //                b2 =  (1 + cos(w0))/2
+    u->hpfs->a0 = (1.0 + alpha);
+    // note that we normalize by a0 from here
+    u->hpfs->a1 = (-2.0 * cos(w0))           / u->hpfs->a0;
+    u->hpfs->a2 = (1.0 - alpha)              / u->hpfs->a0;
+    u->hpfs->b0 = (     (1.0 + cos(w0))/2.0) / u->hpfs->a0;
+    u->hpfs->b1 = (-1.0*(1.0 + cos(w0))    ) / u->hpfs->a0;
+    u->hpfs->b2 = (     (1.0 + cos(w0))/2.0) / u->hpfs->a0;
+    u->hpfs->a0 = 1.0;
 
+    //    APF:        H(s) = (s^2 - s/Q + 1) / (s^2 + s/Q + 1)
+    //                a0 =   1 + alpha
+    //                a1 =  -2*cos(w0)
+    //                a2 =   1 - alpha
+    //                b0 =   1 - alpha
+    //                b1 =  -2*cos(w0)
+    //                b2 =   1 + alpha
+    u->apfs->a0 = (1.0 + alpha);
+    // note that we normalize by a0 from here
+    u->apfs->a1 = (-2.0 * cos(w0))  / u->apfs->a0;
+    u->apfs->a2 = (1.0 - alpha)     / u->apfs->a0;
+    u->apfs->b0 = (1.0 - alpha)     / u->apfs->a0;
+    u->apfs->b1 = (-2.0 * cos(w0))  / u->apfs->a0;
+    u->apfs->b2 = (1.0 + alpha)     / u->apfs->a0;
+    u->apfs->a0 = 1.0;
+
+    pa_log ("JZ: %s[%d]\n", __FILE__, __LINE__);
+    pa_log ("\tw0=%0.8f, Q=%0.8f, alpha=%0.8f", w0, Q, alpha);
+    pa_log ("\tlowpass_factors\n"
+             "\t[b0, b1, b2]=[%0.8f, %0.8f, %0.8f]\n"
+             "\t[a0, a1, a2]=[%0.8f, %0.8f, %0.8f]\n",
+             u->lpfs->b0, u->lpfs->b1, u->lpfs->b2,
+             u->lpfs->a0, u->lpfs->a1, u->lpfs->a2
+            );
+    pa_log ("\thighpass_factors\n"
+             "\t[b0, b1, b2]=[%0.8f, %0.8f, %0.8f]\n"
+             "\t[a0, a1, a2]=[%0.8f, %0.8f, %0.8f]\n",
+             u->hpfs->b0, u->hpfs->b1, u->hpfs->b2,
+             u->hpfs->a0, u->hpfs->a1, u->hpfs->a2
+            );
+    pa_log ("\tallpass_factors\n"
+             "\t[b0, b1, b2]=[%0.8f, %0.8f, %0.8f]\n"
+             "\t[a0, a1, a2]=[%0.8f, %0.8f, %0.8f]\n",
+             u->apfs->b0, u->apfs->b1, u->apfs->b2,
+             u->apfs->a0, u->apfs->a1, u->apfs->a2
+            );
     return;
 }
 
@@ -225,21 +227,26 @@ static void calc_filter_factors(pa_sink *sink) {
  */
 static void init_filter(pa_sink *sink) {
     struct userdata *u;
+    unsigned int i;
+    struct biquad_data bqdt;
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
 
-    u->bqdt->w0 = 0.0;
-    u->bqdt->w1 = 0.0;
-    u->bqdt->w2 = 0.0;
-    u->bqdt->y0 = 0.0;
-    u->bqdt->y1 = 0.0;
-    u->bqdt->y2 = 0.0;
-
-    u->mpdt->h1 = 0.0;
+    for (i=0; i<u->sample_spec.channels; i++) {
+        bqdt.w0 = 0.0;
+        bqdt.w1 = 0.0;
+        bqdt.w2 = 0.0;
+        bqdt.y0 = 0.0;
+        bqdt.y1 = 0.0;
+        bqdt.y2 = 0.0;
+        u->lpdt[i] = bqdt;
+        u->hpdt[i] = bqdt;
+        u->apdt[i] = bqdt;
+    }
 }
 
 static const char* const valid_modargs[] = { "sink_name", "sink_properties",
-                                             "master", "lpfreq", "lppoles",
+                                             "master", "lpfreq",
                                              "use_volume_sharing",
                                              "force_flat_volume", NULL };
 
@@ -353,7 +360,10 @@ static void sink_set_mute_cb(pa_sink *s) {
 }
 
 /**
- * \brief Low pass filters the audio data from sink_input
+ * \brief filters the audio data from sink_input
+ * \param [in]      sink_input  from whence cometh the noise
+ * \param [in]      nbytes      ???
+ * \param [in/out]  audio data
  * \return always returns (int)0
  * \note Called from I/O thread context
  */
@@ -362,10 +372,12 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
                              pa_memchunk *chunk) {
     struct userdata *u;
     float *src, *dst, *cur_sample, *cur_frame, *dst_frame, *dst_sample;
+    float hp = 0.0f;
+    float lp = 0.0f;
+    float ap = 0.0f;
     size_t framesize;
     unsigned num_frames, frm_idx, chan_idx;
     pa_memchunk tchunk;
-    pa_usec_t current_latency PA_GCC_UNUSED;
 
     pa_sink_input_assert_ref(sink_input);
     pa_assert(chunk);
@@ -406,13 +418,24 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
         for (chan_idx = 0; chan_idx < u->sample_spec.channels; chan_idx++) {
             cur_sample = cur_frame + chan_idx;
             dst_sample = dst_frame + chan_idx;
-            if (chan_idx == u->lfeidx) {
-                do_filter(u->sink, cur_sample, dst_sample);
+            if (u->filter_map[chan_idx] == 'l') {
+                lp = biquad(&(u->lpdt[chan_idx]), *(u->lpfs), cur_sample);
+                *dst_sample = biquad(&(u->lpdt[chan_idx]), *(u->lpfs), &lp);
+            } else
+            if (u->filter_map[chan_idx] == 'h') {
+                hp = biquad(&(u->hpdt[chan_idx]), *(u->hpfs), cur_sample);
+                *dst_sample = biquad(&(u->hpdt[chan_idx]), *(u->hpfs), &hp);
+            } else
+            if (u->filter_map[chan_idx] == 'a') {
+                ap = biquad(&(u->apdt[chan_idx]), *(u->apfs), cur_sample);
+                *dst_sample = biquad(&(u->apdt[chan_idx]), *(u->apfs), &ap);
             } else {
-                *dst_sample = *cur_sample;
+                pa_log_error("JZ %s[%d] Should never get here, even in Jersey.",
+                             __FILE__, __LINE__);
             }
         }
     }
+    fprintf(stdout, "\n");
 
     pa_memblock_release(tchunk.memblock);
     pa_memblock_release(chunk->memblock);
@@ -420,12 +443,14 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
     pa_memblock_unref(tchunk.memblock);
 
     /* (4) IF YOU NEED THE LATENCY FOR SOMETHING ACQUIRE IT LIKE THIS: */
-    /* Get the latency of master and add the latency internal to our sink input*/
-    current_latency = (pa_sink_get_latency_within_thread(sink_input->sink)
-            + pa_bytes_to_usec(
-                    pa_memblockq_get_length(
-                            sink_input->thread_info.render_memblockq),
-                    &sink_input->sink->sample_spec));
+    /* Get the latency of master and add the latency internal to our sink input
+    current_latency = (pa_sink_get_latency_within_thread(sink_input->sink) +
+                       pa_bytes_to_usec(
+                               pa_memblockq_get_length(
+                                       sink_input->thread_info.render_memblockq),
+                                       &sink_input->sink->sample_spec
+                                       )
+                      );*/
 
     return (0);
 }
@@ -460,6 +485,7 @@ static void sink_input_process_rewind_cb(pa_sink_input *i, size_t nbytes) {
 }
 
 /* Called from I/O thread context */
+//TODO: use this to handle history data.
 static void sink_input_update_max_rewind_cb(pa_sink_input *i, size_t nbytes) {
     struct userdata *u;
     pa_sink_input_assert_ref(i);
@@ -630,10 +656,6 @@ int pa__init(pa_module *m) {
     pa_bool_t use_volume_sharing = TRUE;
     pa_bool_t force_flat_volume = FALSE;
     pa_memchunk silence;
-    struct biquad_factors bqfs =   {0.0,0.0,0.0,0.0,0.0,0.0};
-    struct biquad_data bqdt =      {0.0,0.0,0.0,0.0,0.0,0.0};
-    struct monopole_factors mpfs = {0.0};
-    struct monopole_data mpdt =    {0.0};
 
     pa_assert(m);
 
@@ -651,10 +673,6 @@ int pa__init(pa_module *m) {
     pa_assert(master);
 
     u = pa_xnew0(struct userdata, 1);
-    u->bqfs = &bqfs;
-    u->bqdt = &bqdt;
-    u->mpfs = &mpfs;
-    u->mpdt = &mpdt;
 
     // get, validate and assign lowpass cutoff freq
     u->lpfreq = atof(pa_modargs_get_value(ma, "lpfreq", "100.0"));
@@ -668,19 +686,7 @@ int pa__init(pa_module *m) {
                 __FILE__, __LINE__, MIN_CUTOFF_FREQ, MAX_CUTOFF_FREQ);
         u->lpfreq = MAX_CUTOFF_FREQ;
     }
-    pa_log_debug("JZ: %s[%d] lpfreq=%f\n", __FILE__, __LINE__, u->lpfreq);
-
-    // get, validate and assign lowpass poles
-    u->poles = atoi(pa_modargs_get_value(ma, "lppoles", "1"));
-    if (u->poles < MIN_POLES) {
-        pa_log ("JZ: %s[%d] poles must be from 1-10.", __FILE__, __LINE__);
-        u->poles = MIN_POLES;
-    }
-    if (u->poles > MAX_POLES) {
-        pa_log ("JZ: %s[%d] poles must be from 1-10.", __FILE__, __LINE__);
-        u->poles = MAX_POLES;
-    }
-    pa_log_debug("JZ: %s[%d] poles=%d\n", __FILE__, __LINE__, u->poles);
+    pa_log("JZ: %s[%d] lpfreq=%f\n", __FILE__, __LINE__, u->lpfreq);
 
     u->sample_spec = master->sample_spec;
     u->sample_spec.format = PA_SAMPLE_FLOAT32;
@@ -693,19 +699,40 @@ int pa__init(pa_module *m) {
         goto fail;
     }
 
-    // make sure we have an lfe channel
-    u->lfeidx = PA_CHANNELS_MAX + 1;
+    // setup filter factors and filter history
+    u->lpfs = malloc(sizeof(biquad_factors));
+    u->hpfs = malloc(sizeof(biquad_factors));
+    u->apfs = malloc(sizeof(biquad_factors));
+    u->lpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->hpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->apdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+
+    /* setup filter_map
+     * 'l' for lowpass, 'h' for highpass, 'a' allpass
+     * lfe --> lowpass
+     * .*center --> high
+     * .*left/right/aux -> allpass
+     */
+    pa_log("JZ: %s[%d] filter_map=\n", __FILE__, __LINE__);
     for (int i = 0; i < u->sample_spec.channels; i++) {
-        if (map.map[i] == PA_CHANNEL_POSITION_LFE)
-            u->lfeidx = i;
+        switch (map.map[i]) {
+            case PA_CHANNEL_POSITION_CENTER:
+            case PA_CHANNEL_POSITION_REAR_CENTER:
+            case PA_CHANNEL_POSITION_FRONT_LEFT_OF_CENTER:
+            case PA_CHANNEL_POSITION_FRONT_RIGHT_OF_CENTER:
+            case PA_CHANNEL_POSITION_TOP_CENTER:
+            case PA_CHANNEL_POSITION_TOP_FRONT_CENTER:
+            case PA_CHANNEL_POSITION_TOP_REAR_CENTER:
+                u->filter_map[i] = 'h';
+                break;
+            case PA_CHANNEL_POSITION_LFE:
+                u->filter_map[i] = 'l';
+                break;
+            default:
+                u->filter_map[i] = 'a';
+        }
+        pa_log("\t%d %c\n", i, u->filter_map[i]);
     }
-    if (u->lfeidx > PA_CHANNELS_MAX) {
-        pa_log("JZ: %s[%d] no lfe channel found", __FILE__, __LINE__ );
-        // TODO: debugging, remove me and reenable fail
-        u->lfeidx = 0;
-        //goto fail;
-    }
-    pa_log_debug("JZ: %s[%d] lfe_index=%u", __FILE__, __LINE__, u->lfeidx);
 
     if (pa_modargs_get_value_boolean(ma, "use_volume_sharing",
                                      &use_volume_sharing)
@@ -875,6 +902,21 @@ void pa__done(pa_module*m) {
     if (!(u = m->userdata))
         return;
 
+    // Free filter factors and filter history data
+    if (u->lpfs)
+        free(u->lpfs);
+    if (u->hpfs)
+        free(u->hpfs);
+    if (u->apfs)
+        free(u->apfs);
+    if (u->lpdt)
+        free(u->lpdt);
+    if (u->hpdt)
+        free(u->hpdt);
+    if (u->apdt)
+        free(u->apdt);
+
+
     /* See comments in sink_input_kill_cb() above regarding
      * destruction order! */
 
@@ -895,39 +937,3 @@ void pa__done(pa_module*m) {
 
     pa_xfree(u);
 }
-/*
-Command line: /www/usr/fisher/helpers/mkfilter -Bu -Lp -o 2 -a 2.0833333333e-03 0.0000000000e+00
-raw alpha1    =   0.0020833333
-warped alpha1 =   0.0020833631
-gain at dc    :   mag = 2.356080688e+04   phase =   0.0000000000 pi
-gain at centre:   mag = 1.666000631e+04   phase =  -0.5000000000 pi
-S-plane poles:
-     -0.0092561383 + j   0.0092561383
-     -0.0092561383 + j  -0.0092561383
-Z-plane zeros:
-     -1.0000000000 + j   0.0000000000   2 times
-Z-plane poles:
-      0.9907442546 + j   0.0091708587
-      0.9907442546 + j  -0.0091708587
-Recurrence relation:
-y[n] = (  1 * x[n- 2])
-     + (  2 * x[n- 1])
-     + (  1 * x[n- 0])
-     + ( -0.9816582826 * y[n- 2])
-     + (  1.9814885091 * y[n- 1])
-
-Ansi ``C'' Code
-#define NZEROS 2
-#define NPOLES 2
-#define GAIN   2.356080688e+04
-static float u->src_factors[NZEROS+1], u->dst_factors[NPOLES+1];
-static void filterloop()
-  { for (;;)
-      { u->src_factors[0] = u->src_factors[1]; u->src_factors[1] = u->src_factors[2];
-        u->src_factors[2] = next input value / GAIN;
-        u->dst_factors[0] = u->dst_factors[1]; u->dst_factors[1] = u->dst_factors[2];
-        u->dst_factors[2] =   (u->src_factors[0] + u->src_factors[2]) + 2 * u->src_factors[1]  + ( -0.9816582826 * u->dst_factors[0]) + (  1.9814885091 * u->dst_factors[1]);
-        next output value = u->dst_factors[2];
-      }
-  }
- */
