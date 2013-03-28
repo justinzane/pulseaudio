@@ -26,6 +26,8 @@
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
+#include <float.h>
+#include <xmmintrin.h>
 
 #include <pulse/gccmacro.h>
 #include <pulse/xmalloc.h>
@@ -47,7 +49,11 @@
 // TODO: Why am I defined here? Shouldn't I come from pulse/pulsecore?
 #define MEMBLOCKQ_MAXLENGTH (16*1024*1024)
 #ifndef PI
-    #define PI 3.1415926535897932384626433
+    #ifndef M_PI
+        #define PI 3.1415926535897932384626433
+    #else
+        #define PI M_PI
+    #endif
 #endif
 #define MIN_CUTOFF_FREQ 20.0
 #define MAX_CUTOFF_FREQ 500.0
@@ -80,10 +86,36 @@ typedef struct biquad_data{
     double w2;
 } biquad_data;
 
-PA_MODULE_AUTHOR("Justin Chudgar");
-PA_MODULE_DESCRIPTION(_("LFE LP Filter"));
+/**
+ * \struct biquad_data_element
+ * \brief  holds one sample of biquad filter history data -- 1/3 of total.
+ *         used for the rewind buffer
+ */
+typedef struct biquad_data_element {
+    double y0;
+    double w0;
+} biquad_data_element;
+
+/**
+ * \struct biquad_history
+ * \brief  holds the rewind history of filter data
+ * \var idx     the current position in the buffer
+ * \var start   the initial position in the buffer
+ * \var length  the length, in sizeof(biquad_data) of the buffer
+ * \var buffer  the buffer
+ */
+typedef struct biquad_history {
+    u_int64_t idx;
+    u_int64_t start;
+    u_int64_t length;
+    biquad_data_element *buffer;
+} biquad_history;
+
+
+PA_MODULE_AUTHOR( _("Justin Chudgar"));
+PA_MODULE_DESCRIPTION( _("LFE LP Filter"));
 #ifndef PACKAGE_VERSION
-#define PACKAGE_VERSION "0.0.0-bogus"
+#define PACKAGE_VERSION ( _("0.0.0-bogus"))
 #endif
 PA_MODULE_VERSION(PACKAGE_VERSION);
 PA_MODULE_LOAD_ONCE(FALSE);
@@ -94,7 +126,12 @@ PA_MODULE_USAGE( _("sink_name=<name for the sink> "
         "use_volume_sharing=<yes or no> "
         "force_flat_volume=<yes or no> " ));
 
-/** \def persistent user data structure */
+static const char* const valid_modargs[] = { "sink_name", "sink_properties",
+                                             "master", "lpfreq",
+                                             "use_volume_sharing",
+                                             "force_flat_volume", NULL };
+
+/** \var persistent user data structure */
 struct userdata {
     pa_module *module;
     pa_bool_t autoloaded;
@@ -103,15 +140,36 @@ struct userdata {
     pa_memblockq *memblockq;
     pa_bool_t auto_desc;
     pa_sample_spec sample_spec;
-    /** \def corner/cutoff frequency, user defined */
+    /** \var corner/cutoff frequency, user defined */
     double lpfreq;
-    /** \defgroup lowpass, highpass and allpass coefficients, respectively */
+    /** \var lowpass, highpass and allpass coefficients, respectively */
     struct biquad_factors *lpfs, *hpfs, *apfs;
-    /** \defgroup history data for the various filters */
+    /** \var history data for the various filters */
     struct biquad_data *lpdt, *hpdt, *apdt;
-    /** \def map of channels index to 'l','h' or 'a' to indicate filter type */
+    /** \var rewind buffer for biquad_data */
+    struct biquad_history *rewind_buf;
+    /** \var map of channels index to 'l','h' or 'a' to indicate filter type */
     char filter_map[PA_CHANNELS_MAX];
 };
+
+/**
+ * \brief   Setup the rewind history as a circular buffer with space for
+ *          [max_rewind frames][num channels][size of biquad_data_element]
+ * \param [in/out]  sink    pointer to this sink
+ */
+static void filter_init_history (pa_sink *sink) {
+    struct userdata *u;
+    struct biquad_history *history;
+    pa_sink_assert_ref(sink);
+    pa_assert_se(u = sink->userdata);
+
+    (*history).length = u->sink->thread_info.max_rewind;
+    (*history).idx = 0;
+    (*history).start = 0;
+    (*history).buffer = calloc((*history).length,
+                               (sizeof(biquad_data_element) *
+                                u->sample_spec.channels));
+}
 
 /**
  * \brief do the filtering
@@ -120,18 +178,17 @@ struct userdata {
  * \param [in]  src     the input sample
  * \return              the filtered sample
  */
-static float biquad(struct biquad_data *bqdt, struct biquad_factors bqfs,
+static float filter_biquad (struct biquad_data *bqdt, struct biquad_factors bqfs,
                    float *src) {
-    //#y0= (b0 * x0 + b1 * x1 + b2 * x2) −
-    //               (a1 * y1 + a2 * y2);
+    //#y0= (b0 * x0 + b1 * x1 + b2 * x2) − (a1 * y1 + a2 * y2);
     (*bqdt).w0 = (double)*src;
     (*bqdt).y0 = (*bqdt).w0 * bqfs.b0 +  (*bqdt).w1 * bqfs.b1 + (*bqdt).w2 * bqfs.b2
                                 - ((*bqdt).y1 * bqfs.a1 + (*bqdt).y2 * bqfs.a2);
-    //TODO: Handle channels and rewind.
     (*bqdt).w2 = (*bqdt).w1;
     (*bqdt).w1 = (*bqdt).w0;
     (*bqdt).y2 = (*bqdt).y1;
     (*bqdt).y1 = (*bqdt).y0;
+
 
     return((float)(*bqdt).y0);
 }
@@ -139,8 +196,31 @@ static float biquad(struct biquad_data *bqdt, struct biquad_factors bqfs,
 /**
  * \brief   function to calculate filter factors
  * \url     http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
+ * \details
+ * LPF:        H(s) = 1 / (s^2 + s/Q + 1)
+ *               a0 =   1 + alpha
+ *               a1 =  -2*cos(w0)
+ *               a2 =   1 - alpha
+ *               b0 =  (1 - cos(w0))/2
+ *               b1 =  (1 - cos(w0))
+ *               b2 =  (1 - cos(w0))/2
+ * HPF:        H(s) = s^2 / (s^2 + s/Q + 1)
+ *               a0 =   1 + alpha
+ *               a1 =  -2*cos(w0)
+ *               a2 =   1 - alpha
+ *               b0 =  (1 + cos(w0))/2
+ *               b1 = -(1 + cos(w0))
+ *               b2 =  (1 + cos(w0))/2
+ * APF:        H(s) = (s^2 - s/Q + 1) / (s^2 + s/Q + 1)
+ *               a0 =   1 + alpha
+ *               a1 =  -2*cos(w0)
+ *               a2 =   1 - alpha
+ *               b0 =   1 - alpha
+ *               b1 =  -2*cos(w0)
+ *               b2 =   1 + alpha
+ * All coefficients are normalized by dividing by the respective a0.
  */
-static void calc_filter_factors(pa_sink *sink) {
+static void filter_calc_factors(pa_sink *sink) {
     struct userdata *u;
     double w0,Q,alpha;
     pa_sink_assert_ref(sink);
@@ -150,16 +230,7 @@ static void calc_filter_factors(pa_sink *sink) {
     Q = sqrt(2.0)/2.0;
     alpha = sin(w0) / (2.0 * Q);
 
-
-    //    LPF:        H(s) = 1 / (s^2 + s/Q + 1)
-    //                a0 =   1 + alpha
-    //                a1 =  -2*cos(w0)
-    //                a2 =   1 - alpha
-    //                b0 =  (1 - cos(w0))/2
-    //                b1 =  (1 - cos(w0))
-    //                b2 =  (1 - cos(w0))/2
     u->lpfs->a0 = (1.0 + alpha);
-    // note that we normalize by a0 from here
     u->lpfs->a1 = (-2.0 * cos(w0))        / u->lpfs->a0;
     u->lpfs->a2 = (1.0 - alpha)           / u->lpfs->a0;
     u->lpfs->b0 = ((1.0 - cos(w0)) / 2.0) / u->lpfs->a0;
@@ -167,15 +238,7 @@ static void calc_filter_factors(pa_sink *sink) {
     u->lpfs->b2 = ((1.0 - cos(w0)) / 2.0) / u->lpfs->a0;
     u->lpfs->a0 = 1.0;
 
-    //    HPF:        H(s) = s^2 / (s^2 + s/Q + 1)
-    //                a0 =   1 + alpha
-    //                a1 =  -2*cos(w0)
-    //                a2 =   1 - alpha
-    //                b0 =  (1 + cos(w0))/2
-    //                b1 = -(1 + cos(w0))
-    //                b2 =  (1 + cos(w0))/2
     u->hpfs->a0 = (1.0 + alpha);
-    // note that we normalize by a0 from here
     u->hpfs->a1 = (-2.0 * cos(w0))           / u->hpfs->a0;
     u->hpfs->a2 = (1.0 - alpha)              / u->hpfs->a0;
     u->hpfs->b0 = (     (1.0 + cos(w0))/2.0) / u->hpfs->a0;
@@ -183,15 +246,7 @@ static void calc_filter_factors(pa_sink *sink) {
     u->hpfs->b2 = (     (1.0 + cos(w0))/2.0) / u->hpfs->a0;
     u->hpfs->a0 = 1.0;
 
-    //    APF:        H(s) = (s^2 - s/Q + 1) / (s^2 + s/Q + 1)
-    //                a0 =   1 + alpha
-    //                a1 =  -2*cos(w0)
-    //                a2 =   1 - alpha
-    //                b0 =   1 - alpha
-    //                b1 =  -2*cos(w0)
-    //                b2 =   1 + alpha
     u->apfs->a0 = (1.0 + alpha);
-    // note that we normalize by a0 from here
     u->apfs->a1 = (-2.0 * cos(w0))  / u->apfs->a0;
     u->apfs->a2 = (1.0 - alpha)     / u->apfs->a0;
     u->apfs->b0 = (1.0 - alpha)     / u->apfs->a0;
@@ -199,21 +254,21 @@ static void calc_filter_factors(pa_sink *sink) {
     u->apfs->b2 = (1.0 + alpha)     / u->apfs->a0;
     u->apfs->a0 = 1.0;
 
-    pa_log ("JZ: %s[%d]\n", __FILE__, __LINE__);
-    pa_log ("\tw0=%0.8f, Q=%0.8f, alpha=%0.8f", w0, Q, alpha);
-    pa_log ("\tlowpass_factors\n"
+    pa_log_info ("JZ: %s[%d]\n", __FILE__, __LINE__);
+    pa_log_info ("\tw0=%0.8f, Q=%0.8f, alpha=%0.8f", w0, Q, alpha);
+    pa_log_info ("\tlowpass_factors\n"
              "\t[b0, b1, b2]=[%0.8f, %0.8f, %0.8f]\n"
              "\t[a0, a1, a2]=[%0.8f, %0.8f, %0.8f]\n",
              u->lpfs->b0, u->lpfs->b1, u->lpfs->b2,
              u->lpfs->a0, u->lpfs->a1, u->lpfs->a2
             );
-    pa_log ("\thighpass_factors\n"
+    pa_log_info ("\thighpass_factors\n"
              "\t[b0, b1, b2]=[%0.8f, %0.8f, %0.8f]\n"
              "\t[a0, a1, a2]=[%0.8f, %0.8f, %0.8f]\n",
              u->hpfs->b0, u->hpfs->b1, u->hpfs->b2,
              u->hpfs->a0, u->hpfs->a1, u->hpfs->a2
             );
-    pa_log ("\tallpass_factors\n"
+    pa_log_info ("\tallpass_factors\n"
              "\t[b0, b1, b2]=[%0.8f, %0.8f, %0.8f]\n"
              "\t[a0, a1, a2]=[%0.8f, %0.8f, %0.8f]\n",
              u->apfs->b0, u->apfs->b1, u->apfs->b2,
@@ -223,9 +278,10 @@ static void calc_filter_factors(pa_sink *sink) {
 }
 
 /**
- * \brief set filter history data to 0.0
+ * \brief initialize filter history data to 0.0
+ * \param [in/out]  sink    this sink
  */
-static void init_filter(pa_sink *sink) {
+static void filter_init_bqdt (pa_sink *sink) {
     struct userdata *u;
     unsigned int i;
     struct biquad_data bqdt;
@@ -245,18 +301,40 @@ static void init_filter(pa_sink *sink) {
     }
 }
 
-static const char* const valid_modargs[] = { "sink_name", "sink_properties",
-                                             "master", "lpfreq",
-                                             "use_volume_sharing",
-                                             "force_flat_volume", NULL };
+/**
+ * \brief store a biquad_data_element struct in the history buffer so that we
+ *        can rewind without audio inconsistencies.
+ * \param [in/out]  sink    pointer to this sink
+ * \param [in]      bqdtel  pointer to the biquad_data_element to be stored
+ */
+static void filter_store_history (pa_sink *sink, biquad_data_element *bqdtel) {
+    struct userdata *u;
+    pa_sink_assert_ref(sink);
+    pa_assert_se(u = sink->userdata);
 
-/* Called from I/O thread context */
-static int sink_process_msg_cb(pa_msgobject *o,
+    u->rewind_buf->buffer[u->rewind_buf->idx] = *bqdtel;
+    u->rewind_buf->idx += 1;
+    if (u->rewind_buf->idx >= u->rewind_buf->length)
+        u->rewind_buf->idx = 0;
+}
+
+/**
+ * \fn sink_process_msg_cb
+ * \brief callback function used from the IO thread context
+ * @param [in]  msgobject   ???
+ * @param [in]  code        ???
+ * @param [in]  data        ???
+ * @param [in]  offset      ???
+ * @param [in]  chunk       ???
+ * @return  ???
+ * \note Currently only handles PA_SINK_MESSAGE_GET_LATENCY.
+ */
+static int sink_process_msg_cb(pa_msgobject *msgobject,
                                int code,
                                void *data,
                                int64_t offset,
                                pa_memchunk *chunk) {
-    struct userdata *u = PA_SINK(o)->userdata;
+    struct userdata *u = PA_SINK(msgobject)->userdata;
 
     switch (code) {
         case PA_SINK_MESSAGE_GET_LATENCY:
@@ -266,7 +344,7 @@ static int sink_process_msg_cb(pa_msgobject *o,
             if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) ||
                 !PA_SINK_INPUT_IS_LINKED(u->sink_input->thread_info.state)) {
                 *((pa_usec_t*) data) = 0;
-                return 0;
+                return(0);
             }
             /* Get the latency of the master sink and add the latency internal
              to our sink input on top */
@@ -276,42 +354,54 @@ static int sink_process_msg_cb(pa_msgobject *o,
                             pa_memblockq_get_length(
                                     u->sink_input->thread_info.render_memblockq),
                             &u->sink_input->sink->sample_spec);
-            return 0;
+            return(0);
     }
-    return pa_sink_process_msg(o, code, data, offset, chunk);
+    return(pa_sink_process_msg(msgobject, code, data, offset, chunk));
 }
 
-/* Called from main context */
-static int sink_set_state_cb(pa_sink *s, pa_sink_state_t state) {
+/**
+ * \brief callback used from main thread context to set this sink's state
+ * @param sink
+ * @param state
+ * @return always returns 0
+ */
+//TODO: document me better
+static int sink_set_state_cb(pa_sink *sink, pa_sink_state_t state) {
     struct userdata *u;
-    pa_sink_assert_ref(s);
-    pa_assert_se(u = s->userdata);
+    pa_sink_assert_ref(sink);
+    pa_assert_se(u = sink->userdata);
 
     if (!PA_SINK_IS_LINKED(state) ||
         !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
-        return 0;
+        return(0);
 
     pa_sink_input_cork(u->sink_input, state == PA_SINK_SUSPENDED);
-    return 0;
+    return(0);
 }
 
-/* Called from I/O thread context */
-static void sink_request_rewind_cb(pa_sink *s) {
+/**
+ * \brief   callback used from IO thread context to request a rewind
+ * \param sink
+ */
+//TODO: document me better
+static void sink_request_rewind_cb(pa_sink *sink) {
     struct userdata *u;
+    pa_sink_assert_ref(sink);
+    pa_assert_se(u = sink->userdata);
 
-    pa_sink_assert_ref(s);
-    pa_assert_se(u = s->userdata);
-
-    if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) || !PA_SINK_INPUT_IS_LINKED(
-            u->sink_input->thread_info.state))
+    if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) ||
+        !PA_SINK_INPUT_IS_LINKED(u->sink_input->thread_info.state)) {
+        pa_log_debug("JZ: %s[%d] sink or sink-input not linked, cannot rewind");
         return;
+    }
 
     /* Just hand this one over to the master sink */
-    pa_sink_input_request_rewind(
-            u->sink_input,
-            s->thread_info.rewind_nbytes + pa_memblockq_get_length(
-                    u->memblockq),
-            TRUE, FALSE, FALSE );
+    pa_sink_input_request_rewind(u->sink_input,
+                                 (sink->thread_info.rewind_nbytes +
+                                  pa_memblockq_get_length(u->memblockq)),
+                                 TRUE,
+                                 FALSE,
+                                 FALSE );
 }
 
 /* Called from I/O thread context */
@@ -419,43 +509,39 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
             cur_sample = cur_frame + chan_idx;
             dst_sample = dst_frame + chan_idx;
             if (u->filter_map[chan_idx] == 'l') {
-                lp = biquad(&(u->lpdt[chan_idx]), *(u->lpfs), cur_sample);
-                *dst_sample = biquad(&(u->lpdt[chan_idx]), *(u->lpfs), &lp);
+                lp = filter_biquad(&(u->lpdt[chan_idx]), *(u->lpfs), cur_sample);
+                *dst_sample = filter_biquad(&(u->lpdt[chan_idx]), *(u->lpfs), &lp);
             } else
             if (u->filter_map[chan_idx] == 'h') {
-                hp = biquad(&(u->hpdt[chan_idx]), *(u->hpfs), cur_sample);
-                *dst_sample = biquad(&(u->hpdt[chan_idx]), *(u->hpfs), &hp);
+                hp = filter_biquad(&(u->hpdt[chan_idx]), *(u->hpfs), cur_sample);
+                *dst_sample = filter_biquad(&(u->hpdt[chan_idx]), *(u->hpfs), &hp);
             } else
             if (u->filter_map[chan_idx] == 'a') {
-                ap = biquad(&(u->apdt[chan_idx]), *(u->apfs), cur_sample);
-                *dst_sample = biquad(&(u->apdt[chan_idx]), *(u->apfs), &ap);
+                ap = filter_biquad(&(u->apdt[chan_idx]), *(u->apfs), cur_sample);
+                *dst_sample = filter_biquad(&(u->apdt[chan_idx]), *(u->apfs), &ap);
             } else {
                 pa_log_error("JZ %s[%d] Should never get here, even in Jersey.",
                              __FILE__, __LINE__);
             }
         }
     }
-    fprintf(stdout, "\n");
 
     pa_memblock_release(tchunk.memblock);
     pa_memblock_release(chunk->memblock);
 
     pa_memblock_unref(tchunk.memblock);
 
-    /* (4) IF YOU NEED THE LATENCY FOR SOMETHING ACQUIRE IT LIKE THIS: */
-    /* Get the latency of master and add the latency internal to our sink input
-    current_latency = (pa_sink_get_latency_within_thread(sink_input->sink) +
-                       pa_bytes_to_usec(
-                               pa_memblockq_get_length(
-                                       sink_input->thread_info.render_memblockq),
-                                       &sink_input->sink->sample_spec
-                                       )
-                      );*/
-
     return (0);
 }
 
-/* Called from I/O thread context */
+/**
+ * \fn    sink_input_process_rewind_cb
+ * \brief Callback function used called from the IO thread context. Causes the
+ *        sink to rewind the biquad history buffer.
+ * \param [in]      i       pointer to the sink input
+ * \param [in]      nbytes  number of bytes to rewind
+ */
+//TODO: make me work with biquad history
 static void sink_input_process_rewind_cb(pa_sink_input *i, size_t nbytes) {
     struct userdata *u;
     size_t amount = 0;
@@ -475,8 +561,8 @@ static void sink_input_process_rewind_cb(pa_sink_input *i, size_t nbytes) {
                               TRUE );
             /* (5) PUT YOUR CODE HERE TO RESET YOUR FILTER  */
             // init filter data
-            calc_filter_factors(u->sink);
-            init_filter(u->sink);
+            filter_calc_factors(u->sink);
+            filter_init_bqdt(u->sink);
         }
     }
 
@@ -484,26 +570,39 @@ static void sink_input_process_rewind_cb(pa_sink_input *i, size_t nbytes) {
     pa_memblockq_rewind(u->memblockq, nbytes);
 }
 
-/* Called from I/O thread context */
-//TODO: use this to handle history data.
-static void sink_input_update_max_rewind_cb(pa_sink_input *i, size_t nbytes) {
+/**
+ * \fn sink_input_update_max_rewind_cb
+ * \brief callback function used from IO thread context to update this sink's
+ *        input's max_rewind
+ * \param [in/out] sink_input   pointer to this sink's input
+ * \param [in]     max_rewind   new max_rewind size
+ */
+//TODO: determine context for max_rewind size
+static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input,
+                                            size_t max_rewind) {
     struct userdata *u;
-    pa_sink_input_assert_ref(i);
-    pa_assert_se(u = i->userdata);
+    pa_sink_input_assert_ref(sink_input);
+    pa_assert_se(u = sink_input->userdata);
     /* FIXME: Too small max_rewind:
      * https://bugs.freedesktop.org/show_bug.cgi?id=53709 */
-    pa_memblockq_set_maxrewind(u->memblockq, nbytes);
-    pa_sink_set_max_rewind_within_thread(u->sink, nbytes);
+    pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
+    pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
 }
 
-/* Called from I/O thread context */
-static void sink_input_update_max_request_cb(pa_sink_input *i, size_t nbytes) {
+/**
+ * \fn sink_input_update_max_request_cb
+ * \brief Callback function used from IO thread context to update this sink's
+ *        input's max_request.
+ * \param [in/out]  sink_input  this sink's input
+ * \param [in]      max_request the new max request size
+ */
+//TODO: determine context for max_rewind size
+static void sink_input_update_max_request_cb(pa_sink_input *sink_input,
+                                             size_t max_request) {
     struct userdata *u;
-    pa_sink_input_assert_ref(i);
-    pa_assert_se(u = i->userdata);
-    /* (6) IF YOU NEED A FIXED BLOCK SIZE ROUND nbytes UP TO MULTIPLES
-     * OF IT HERE. THE PA_ROUND_UP MACRO IS USEFUL FOR THAT. */
-    pa_sink_set_max_request_within_thread(u->sink, nbytes);
+    pa_sink_input_assert_ref(sink_input);
+    pa_assert_se(u = sink_input->userdata);
+    pa_sink_set_max_request_within_thread(u->sink, max_request);
 }
 
 /* Called from I/O thread context */
@@ -557,14 +656,19 @@ static void sink_input_attach_cb(pa_sink_input *i) {
 }
 
 /* Called from main context */
-static void sink_input_kill_cb(pa_sink_input *i) {
+/**
+ * \fn sink_input_kill_cb
+ * \brief   Callback used by main thread context to remove this sink's input.
+ * \details The order here matters! We first kill the sink input, followed by
+ *          the sink. That means the sink callbacks must be protected against
+ *          an unconnected sink input!
+ * \param [in]  sink_input  pointer to the victim, this sink's input
+ */
+static void sink_input_kill_cb(pa_sink_input *sink_input) {
     struct userdata *u;
+    pa_sink_input_assert_ref(sink_input);
+    pa_assert_se(u = sink_input->userdata);
 
-    pa_sink_input_assert_ref(i);
-    pa_assert_se(u = i->userdata);
-
-    /* The order here matters! We first kill the sink input, followed by the sink.
-     * That means the sink callbacks must be protected against an unconnected sink input! */
     pa_sink_input_unlink(u->sink_input);
     pa_sink_unlink(u->sink);
 
@@ -574,6 +678,7 @@ static void sink_input_kill_cb(pa_sink_input *i) {
     pa_sink_unref(u->sink);
     u->sink = NULL;
 
+    //TODO: document why we unload
     pa_module_unload_request(u->module, TRUE );
 }
 
@@ -597,7 +702,7 @@ static pa_bool_t sink_input_may_move_to_cb(pa_sink_input *i, pa_sink *dest) {
     struct userdata *u;
     pa_sink_input_assert_ref(i);
     pa_assert_se(u = i->userdata);
-    return u->sink != dest;
+    return(u->sink != dest);
 }
 
 /* Called from main context */
@@ -686,26 +791,28 @@ int pa__init(pa_module *m) {
                 __FILE__, __LINE__, MIN_CUTOFF_FREQ, MAX_CUTOFF_FREQ);
         u->lpfreq = MAX_CUTOFF_FREQ;
     }
-    pa_log("JZ: %s[%d] lpfreq=%f\n", __FILE__, __LINE__, u->lpfreq);
+    pa_log_info("JZ: %s[%d] lpfreq=%f\n", __FILE__, __LINE__, u->lpfreq);
 
     u->sample_spec = master->sample_spec;
     u->sample_spec.format = PA_SAMPLE_FLOAT32;
 
     map = master->channel_map;
-    if (pa_modargs_get_sample_spec_and_channel_map(ma, &u->sample_spec, &map,
-                                                   PA_CHANNEL_MAP_DEFAULT)
-        < 0) {
+    if (pa_modargs_get_sample_spec_and_channel_map(ma,
+                                                   &u->sample_spec,
+                                                   &map,
+                                                   PA_CHANNEL_MAP_DEFAULT) < 0) {
         pa_log("Invalid sample format specification or channel map");
         goto fail;
     }
 
-    // setup filter factors and filter history
+    // setup filter factors and filter history buffer
     u->lpfs = malloc(sizeof(biquad_factors));
     u->hpfs = malloc(sizeof(biquad_factors));
     u->apfs = malloc(sizeof(biquad_factors));
     u->lpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
     u->hpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
     u->apdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    filter_init_history(u->sink);
 
     /* setup filter_map
      * 'l' for lowpass, 'h' for highpass, 'a' allpass
@@ -713,7 +820,7 @@ int pa__init(pa_module *m) {
      * .*center --> high
      * .*left/right/aux -> allpass
      */
-    pa_log("JZ: %s[%d] filter_map=\n", __FILE__, __LINE__);
+    pa_log_info("JZ: %s[%d] filter_map=\n", __FILE__, __LINE__);
     for (int i = 0; i < u->sample_spec.channels; i++) {
         switch (map.map[i]) {
             case PA_CHANNEL_POSITION_CENTER:
@@ -731,19 +838,17 @@ int pa__init(pa_module *m) {
             default:
                 u->filter_map[i] = 'a';
         }
-        pa_log("\t%d %c\n", i, u->filter_map[i]);
+        pa_log_info("\t%d %c\n", i, u->filter_map[i]);
     }
 
     if (pa_modargs_get_value_boolean(ma, "use_volume_sharing",
-                                     &use_volume_sharing)
-        < 0) {
+                                     &use_volume_sharing) < 0) {
         pa_log("use_volume_sharing= expects a boolean argument");
         goto fail;
     }
 
     if (pa_modargs_get_value_boolean(ma, "force_flat_volume",
-                                     &force_flat_volume)
-        < 0) {
+                                     &force_flat_volume) < 0) {
         pa_log("force_flat_volume= expects a boolean argument");
         goto fail;
     }
@@ -872,37 +977,41 @@ int pa__init(pa_module *m) {
 
     /* (9) INITIALIZE ANYTHING ELSE YOU NEED HERE */
     // init filter data
-    calc_filter_factors(u->sink);
-    init_filter(u->sink);
+    filter_calc_factors(u->sink);
+    filter_init_bqdt(u->sink);
 
     pa_sink_put(u->sink);
     pa_sink_input_put(u->sink_input);
     pa_modargs_free(ma);
     pa_log_debug("JZ: %s[%d] finished lfe-lp.pa__init().", __FILE__, __LINE__);
-    return 0;
+    return(0);
 
     fail: if (ma)
         pa_modargs_free(ma);
     pa__done(m);
-    return -1;
+    return(-1);
 }
 
 int pa__get_n_used(pa_module *m) {
     struct userdata *u;
     pa_assert(m);
     pa_assert_se(u = m->userdata);
-    return pa_sink_linked_by(u->sink);
+    return(pa_sink_linked_by(u->sink));
 }
 
+/**
+ * \fn pa__done
+ * \brief   We're done, let's cleanup.
+ * \param m
+ * \note    See comments in sink_input_kill_cb() above about destruction order!
+ */
 void pa__done(pa_module*m) {
     struct userdata *u;
-    pa_log_debug("JZ: %s[%d] ", __FILE__, __LINE__);
     pa_assert(m);
 
     if (!(u = m->userdata))
         return;
 
-    // Free filter factors and filter history data
     if (u->lpfs)
         free(u->lpfs);
     if (u->hpfs)
@@ -915,25 +1024,20 @@ void pa__done(pa_module*m) {
         free(u->hpdt);
     if (u->apdt)
         free(u->apdt);
-
-
-    /* See comments in sink_input_kill_cb() above regarding
-     * destruction order! */
+    if ((*(u->rewind_buf)).buffer)
+        free((*(u->rewind_buf)).buffer);
 
     if (u->sink_input)
         pa_sink_input_unlink(u->sink_input);
-
     if (u->sink)
         pa_sink_unlink(u->sink);
-
     if (u->sink_input)
         pa_sink_input_unref(u->sink_input);
-
     if (u->sink)
         pa_sink_unref(u->sink);
-
     if (u->memblockq)
         pa_memblockq_free(u->memblockq);
 
     pa_xfree(u);
+    pa_log_debug("JZ: %s[%d] All done. Bye.", __FILE__, __LINE__);
 }
