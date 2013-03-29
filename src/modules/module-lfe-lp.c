@@ -57,6 +57,7 @@
 #endif
 #define MIN_CUTOFF_FREQ 20.0
 #define MAX_CUTOFF_FREQ 500.0
+#define MIN_REWIND_FRAMES 1024
 
 /**
  * \struct biquad_factors
@@ -151,26 +152,6 @@ struct userdata {
     /** \var map of channels index to 'l','h' or 'a' to indicate filter type */
     char filter_map[PA_CHANNELS_MAX];
 };
-
-/**
- * \brief   Setup the rewind history as a circular buffer with space for
- *          [max_rewind * (size of biquad_data_element) / (size of sample)]
- * \param [in/out]  sink    pointer to this sink
- */
-static void filter_init_history (pa_sink *sink) {
-    struct userdata *u;
-    struct biquad_history *history;
-    pa_sink_assert_ref(sink);
-    pa_assert_se(u = sink->userdata);
-
-    // convert max_rewind from bytes to samples
-    (*history).length = u->sink->thread_info.max_rewind /
-                        sizeof(u->sample_spec.format) ;
-    (*history).idx = 0;
-    (*history).start = 0;
-    (*history).buffer = calloc((*history).length,
-                               sizeof(biquad_data_element));
-}
 
 /**
  * \brief do the filtering
@@ -392,7 +373,8 @@ static void sink_request_rewind_cb(pa_sink *sink) {
 
     if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) ||
         !PA_SINK_INPUT_IS_LINKED(u->sink_input->thread_info.state)) {
-        pa_log_debug("JZ: %s[%d] sink or sink-input not linked, cannot rewind");
+        pa_log_debug("JZ: %s[%d] sink or sink-input not linked, cannot rewind",
+                     __FILE__, __LINE__);
         return;
     }
 
@@ -454,7 +436,7 @@ static void sink_set_volume_cb(pa_sink *sink) {
  * \note    This seems like a silly thing. A filter should not influence the
  *          general volume of the stream.
  */
-//TODO: Remove me safely.
+//TODO: Remove me safely or keep me after discussion with reviewers.
 static void sink_set_mute_cb(pa_sink *s) {
     struct userdata *u;
     pa_sink_assert_ref(s);
@@ -590,7 +572,7 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input,
             pa_memblockq_seek(u->memblockq, -(int64_t) amount, PA_SEEK_RELATIVE,
                               TRUE );
             /* (5) PUT YOUR CODE HERE TO REWIND YOUR FILTER  */
-            rewind_samples = amount / sizeof(u->sample_spec.format);
+            rewind_samples = amount / pa_sample_size_of_format(u->sample_spec.format);
             rewind_frames = rewind_samples / u->sample_spec.channels;
             // add the 2 frame backlog for the biquad
             rewind_frames += 2;
@@ -649,29 +631,77 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input,
  * \brief callback function used from IO thread context to update this sink's
  *        input's max_rewind
  * \param [in/out] sink_input   pointer to this sink's input
- * \param [in]     max_rewind   new max_rewind size
+ * \param [in]     max_rewind   new max_rewind size in bytes
  */
-//TODO: determine context for max_rewind size
+/* FIXME: Too small max_rewind: https://bugs.freedesktop.org/show_bug.cgi?id=53709 */
 static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input,
                                             size_t max_rewind) {
     struct userdata *u;
     size_t shrinkage = 0;
+    size_t growth = 0;
+    size_t i = 0;
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
-    /* FIXME: Too small max_rewind:
-     * https://bugs.freedesktop.org/show_bug.cgi?id=53709 */
-    pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
-    pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
 
-    // realloc u->rewind_buf to the new size
+    if ((max_rewind / pa_frame_size(&(u->sample_spec))) < MIN_REWIND_FRAMES) {
+        if (max_rewind == u->sink->thread_info.max_rewind)
+            pa_log("JZ: %s[%d] sink_input_update_max_rewind_cb called "
+                   "without changing size.\n\tmax_rewind=%u",
+                   __FILE__, __LINE__, max_rewind);
+        // This is an attempt to prevent excessive realloc shrinks and grows
+        return;
+    }
+
+    // grow u->rewind_buf to the new size
     if (max_rewind > u->sink->thread_info.max_rewind) {
-        u->rewind_buf->length = (max_rewind / sizeof(u->sample_spec.format));
+        // convert to num samples
+        growth = (max_rewind /
+                  pa_sample_size_of_format(u->sample_spec.format)) -
+                 u->rewind_buf->length;
+        pa_log_error("JZ: %s[%d]\n\tmax_rewind=%u, growth=%u, idx=%u, length=%u",
+                     __FILE__, __LINE__, max_rewind, growth,
+                     u->rewind_buf->idx, u->rewind_buf->length);
         u->rewind_buf = realloc(u->rewind_buf,
                                 (sizeof(biquad_data_element) *
-                                 (max_rewind / sizeof(u->sample_spec.format))));
-    } else {
-
+                                (u->rewind_buf->length + growth)));
+        for (i=u->rewind_buf->length; i<(u->rewind_buf->length+growth); i++) {
+            u->rewind_buf->buffer[i].w0 = 0.0;
+            u->rewind_buf->buffer[i].y0 = 0.0;
+        }
+        u->rewind_buf->length += growth;
     }
+
+    // shrink to new size
+    if (max_rewind < u->sink->thread_info.max_rewind) {
+        // convert to num samples
+        shrinkage = u->sink->thread_info.max_rewind -
+                    (max_rewind /
+                     pa_sample_size_of_format(u->sample_spec.format));
+        // loop through and move everybody back by shrinkage
+        pa_log_error("JZ: %s[%d]\n\tmax_rewind=%u, shrinkage=%u, idx=%u, length=%u",
+                     __FILE__, __LINE__, max_rewind, shrinkage,
+                     u->rewind_buf->idx, u->rewind_buf->length);
+        for (i=0; i<shrinkage; i++) {
+            pa_log_error("\ti=%d",i);
+            u->rewind_buf->buffer[i + (u->rewind_buf->length - shrinkage)] =
+                    u->rewind_buf->buffer[i];
+        }
+        for (i=0; i<(u->rewind_buf->length - shrinkage); i++) {
+            u->rewind_buf->buffer[i] = u->rewind_buf->buffer[i+shrinkage];
+        }
+        u->rewind_buf->length -= shrinkage;
+        u->rewind_buf = realloc(u->rewind_buf,
+                                (sizeof(biquad_data_element) *
+                                u->rewind_buf->length));
+        if (u->rewind_buf->idx > shrinkage)
+            u->rewind_buf->idx -= shrinkage;
+        else
+            u->rewind_buf->idx = u->rewind_buf->length -
+                                 (shrinkage - u->rewind_buf->idx);
+    }
+
+    pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
+    pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
 }
 
 /**
@@ -681,7 +711,6 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input,
  * \param [in/out]  sink_input  this sink's input
  * \param [in]      max_request the new max request size
  */
-//TODO: determine context for max_rewind size
 static void sink_input_update_max_request_cb(pa_sink_input *sink_input,
                                              size_t max_request) {
     struct userdata *u;
@@ -910,15 +939,6 @@ int pa__init(pa_module *module) {
         goto fail;
     }
 
-    // setup filter factors and filter history buffer
-    u->lpfs = malloc(sizeof(biquad_factors));
-    u->hpfs = malloc(sizeof(biquad_factors));
-    u->apfs = malloc(sizeof(biquad_factors));
-    u->lpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->hpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->apdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    filter_init_history(u->sink);
-
     /* setup filter_map
      * 'l' for lowpass, 'h' for highpass, 'a' allpass
      * lfe --> lowpass
@@ -998,12 +1018,15 @@ int pa__init(pa_module *module) {
                          z ? z : master->name);
     }
 
-    // FIXME: should be PA_SINK_SHARE_VOLUME_WITH_MASTER not 0x1000000U
-    u->sink = pa_sink_new(
-            module->core,
-            &sink_data,
-            (master->flags & (PA_SINK_LATENCY | PA_SINK_DYNAMIC_LATENCY)) | (
-                    use_volume_sharing ? 0x1000000U : 0));
+// here to make Eclipse CDT stop whining
+#ifndef PA_SINK_SHARE_VOLUME_WITH_MASTER
+#define PA_SINK_SHARE_VOLUME_WITH_MASTER 0x1000000U
+#endif
+    u->sink = pa_sink_new(module->core,
+                          &sink_data,
+                          (master->flags &
+                           (PA_SINK_LATENCY | PA_SINK_DYNAMIC_LATENCY)) |
+                          (use_volume_sharing ? PA_SINK_SHARE_VOLUME_WITH_MASTER : 0));
     pa_sink_new_data_done(&sink_data);
 
     if (!u->sink) {
@@ -1081,6 +1104,26 @@ int pa__init(pa_module *module) {
     pa_memblock_unref(silence.memblock);
 
     /* (9) INITIALIZE ANYTHING ELSE YOU NEED HERE */
+    // setup filter factors and filter history buffer
+    u->lpfs = malloc(sizeof(biquad_factors));
+    u->hpfs = malloc(sizeof(biquad_factors));
+    u->apfs = malloc(sizeof(biquad_factors));
+    u->lpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->hpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->apdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->rewind_buf = malloc(4 * sizeof(size_t));
+    if ((u->sink->thread_info.max_rewind /
+        (pa_sample_size_of_format(u->sample_spec.format) /
+         u->sample_spec.channels)) < MIN_REWIND_FRAMES) {
+        u->rewind_buf->length = MIN_REWIND_FRAMES * u->sample_spec.channels;
+    } else {
+        u->rewind_buf->length = u->sink->thread_info.max_rewind /
+                                pa_sample_size_of_format(u->sample_spec.format);
+    }
+    u->rewind_buf->idx = 0;
+    u->rewind_buf->start = 0;
+    u->rewind_buf->buffer = calloc(u->rewind_buf->length,
+                                   sizeof(biquad_data_element));
     // init filter data
     filter_calc_factors(u->sink);
     filter_init_bqdt(u->sink);
@@ -1136,6 +1179,8 @@ void pa__done(pa_module*m) {
         free(u->apdt);
     if ((*(u->rewind_buf)).buffer)
         free((*(u->rewind_buf)).buffer);
+    if (u->rewind_buf)
+        free(u->rewind_buf);
 
     if (u->sink_input)
         pa_sink_input_unlink(u->sink_input);
