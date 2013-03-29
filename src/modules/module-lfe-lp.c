@@ -154,7 +154,7 @@ struct userdata {
 
 /**
  * \brief   Setup the rewind history as a circular buffer with space for
- *          [max_rewind frames][num channels][size of biquad_data_element]
+ *          [max_rewind * (size of biquad_data_element) / (size of sample)]
  * \param [in/out]  sink    pointer to this sink
  */
 static void filter_init_history (pa_sink *sink) {
@@ -163,12 +163,13 @@ static void filter_init_history (pa_sink *sink) {
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
 
-    (*history).length = u->sink->thread_info.max_rewind;
+    // convert max_rewind from bytes to samples
+    (*history).length = u->sink->thread_info.max_rewind /
+                        sizeof(u->sample_spec.format) ;
     (*history).idx = 0;
     (*history).start = 0;
     (*history).buffer = calloc((*history).length,
-                               (sizeof(biquad_data_element) *
-                                u->sample_spec.channels));
+                               sizeof(biquad_data_element));
 }
 
 /**
@@ -404,46 +405,63 @@ static void sink_request_rewind_cb(pa_sink *sink) {
                                  FALSE );
 }
 
-/* Called from I/O thread context */
-static void sink_update_requested_latency_cb(pa_sink *s) {
+/**
+ * \brief   called from the IO thread context. ???
+ * \param sink  this sink
+ */
+//TODO: document me better
+static void sink_update_requested_latency_cb(pa_sink *sink) {
     struct userdata *u;
+    pa_sink_assert_ref(sink);
+    pa_assert_se(u = sink->userdata);
 
-    pa_sink_assert_ref(s);
-    pa_assert_se(u = s->userdata);
-
-    if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) || !PA_SINK_INPUT_IS_LINKED(
-            u->sink_input->thread_info.state))
+    if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) ||
+        !PA_SINK_INPUT_IS_LINKED(u->sink_input->thread_info.state))
         return;
 
     /* Just hand this one over to the master sink */
     pa_sink_input_set_requested_latency_within_thread(
-            u->sink_input, pa_sink_get_requested_latency_within_thread(s));
+            u->sink_input,
+            pa_sink_get_requested_latency_within_thread(sink));
 }
 
-/* Called from main context */
-static void sink_set_volume_cb(pa_sink *s) {
+/**
+ * \brief   callback used from the main thread context to set the sink's volume
+ * \param   sink  this sink
+ * \note    This seems like a silly thing. A filter should not influence the
+ *          general volume of the stream.
+ */
+//TODO: Remove me safely.
+static void sink_set_volume_cb(pa_sink *sink) {
     struct userdata *u;
 
-    pa_sink_assert_ref(s);
-    pa_assert_se(u = s->userdata);
+    pa_sink_assert_ref(sink);
+    pa_assert_se(u = sink->userdata);
 
-    if (!PA_SINK_IS_LINKED(pa_sink_get_state(s)) || !PA_SINK_INPUT_IS_LINKED(
-            pa_sink_input_get_state(u->sink_input)))
+    if (!PA_SINK_IS_LINKED(pa_sink_get_state(sink)) ||
+        !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
         return;
 
-    pa_sink_input_set_volume(u->sink_input, &s->real_volume, s->save_volume,
+    pa_sink_input_set_volume(u->sink_input,
+                             &sink->real_volume,
+                             sink->save_volume,
                              TRUE );
 }
 
-/* Called from main context */
+/**
+ * \brief   callback used from the main thread context to mute/unmute the sink
+ * \param   sink  this sink
+ * \note    This seems like a silly thing. A filter should not influence the
+ *          general volume of the stream.
+ */
+//TODO: Remove me safely.
 static void sink_set_mute_cb(pa_sink *s) {
     struct userdata *u;
-
     pa_sink_assert_ref(s);
     pa_assert_se(u = s->userdata);
 
-    if (!PA_SINK_IS_LINKED(pa_sink_get_state(s)) || !PA_SINK_INPUT_IS_LINKED(
-            pa_sink_input_get_state(u->sink_input)))
+    if (!PA_SINK_IS_LINKED(pa_sink_get_state(s)) ||
+        !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
         return;
 
     pa_sink_input_set_mute(u->sink_input, s->muted, s->save_muted);
@@ -535,43 +553,54 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
 }
 
 /**
- * \fn    sink_input_process_rewind_cb
  * \brief Callback function used called from the IO thread context. Causes the
  *        sink to rewind the biquad history buffer.
- * \param [in]      i       pointer to the sink input
- * \param [in]      nbytes  number of bytes to rewind
+ * \param [in] sink_input       pointer to the sink input
+ * \param [in] rewind_bytes     number of bytes to rewind
  */
 //TODO: make me work with biquad history
-static void sink_input_process_rewind_cb(pa_sink_input *i, size_t nbytes) {
+static void sink_input_process_rewind_cb(pa_sink_input *sink_input,
+                                         size_t rewind_bytes) {
     struct userdata *u;
     size_t amount = 0;
+    size_t rewind_frames = 0;
+    size_t rewind_samples = 0;
+    size_t max_rewrite;
+    unsigned int i = 0;
 
-    pa_sink_input_assert_ref(i);
-    pa_assert_se(u = i->userdata);
+    pa_sink_input_assert_ref(sink_input);
+    pa_assert_se(u = sink_input->userdata);
 
     if (u->sink->thread_info.rewind_nbytes > 0) {
-        size_t max_rewrite;
-
-        max_rewrite = nbytes + pa_memblockq_get_length(u->memblockq);
+        max_rewrite = rewind_bytes + pa_memblockq_get_length(u->memblockq);
         amount = PA_MIN(u->sink->thread_info.rewind_nbytes, max_rewrite);
         u->sink->thread_info.rewind_nbytes = 0;
 
         if (amount > 0) {
             pa_memblockq_seek(u->memblockq, -(int64_t) amount, PA_SEEK_RELATIVE,
                               TRUE );
-            /* (5) PUT YOUR CODE HERE TO RESET YOUR FILTER  */
-            // init filter data
-            filter_calc_factors(u->sink);
-            filter_init_bqdt(u->sink);
+            /* (5) PUT YOUR CODE HERE TO REWIND YOUR FILTER  */
+            rewind_samples = amount / sizeof(u->sample_spec.format);
+            rewind_frames = rewind_samples / u->sample_spec.channels;
+            // add the 2 frame backlog for the biquad
+            rewind_frames += 2;
+            rewind_samples = rewind_frames * u->sample_spec.channels;
+            // check if we have to wrap the ring buffer backwards.
+            if (u->rewind_buf->idx > rewind_samples) {
+                //we're
+            }
+            for (i=0; i < u->sample_spec.channels; i++) {
+
+            }
+
         }
     }
 
     pa_sink_process_rewind(u->sink, amount);
-    pa_memblockq_rewind(u->memblockq, nbytes);
+    pa_memblockq_rewind(u->memblockq, rewind_bytes);
 }
 
 /**
- * \fn sink_input_update_max_rewind_cb
  * \brief callback function used from IO thread context to update this sink's
  *        input's max_rewind
  * \param [in/out] sink_input   pointer to this sink's input
@@ -581,12 +610,23 @@ static void sink_input_process_rewind_cb(pa_sink_input *i, size_t nbytes) {
 static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input,
                                             size_t max_rewind) {
     struct userdata *u;
+    size_t shrinkage = 0;
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
     /* FIXME: Too small max_rewind:
      * https://bugs.freedesktop.org/show_bug.cgi?id=53709 */
     pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
     pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
+
+    // realloc u->rewind_buf to the new size
+    if (max_rewind > u->sink->thread_info.max_rewind) {
+        u->rewind_buf->length = (max_rewind / sizeof(u->sample_spec.format));
+        u->rewind_buf = realloc(u->rewind_buf,
+                                (sizeof(biquad_data_element) *
+                                 (max_rewind / sizeof(u->sample_spec.format))));
+    } else {
+
+    }
 }
 
 /**
@@ -605,17 +645,27 @@ static void sink_input_update_max_request_cb(pa_sink_input *sink_input,
     pa_sink_set_max_request_within_thread(u->sink, max_request);
 }
 
-/* Called from I/O thread context */
-static void sink_input_update_sink_latency_range_cb(pa_sink_input *i) {
+/**
+ * \brief   callback used from IO thread context to update this sink's latency
+ *          with the latency from this sink's input ???
+ * \param   sink_input  pointer to this sink's input
+ */
+//TODO: document me better
+static void sink_input_update_sink_latency_range_cb(pa_sink_input *sink_input) {
     struct userdata *u;
-    pa_sink_input_assert_ref(i);
-    pa_assert_se(u = i->userdata);
+    pa_sink_input_assert_ref(sink_input);
+    pa_assert_se(u = sink_input->userdata);
     pa_sink_set_latency_range_within_thread(u->sink,
-                                            i->sink->thread_info.min_latency,
-                                            i->sink->thread_info.max_latency);
+                                            sink_input->sink->thread_info.min_latency,
+                                            sink_input->sink->thread_info.max_latency);
 }
 
-/* Called from I/O thread context */
+/**
+ * \brief   callback used from IO thread context to update this sink's latency
+ *          with the latency from this sink's input ???
+ * \param   sink_input  pointer to this sink's input
+ */
+//TODO: document me better
 static void sink_input_update_sink_fixed_latency_cb(pa_sink_input *i) {
     struct userdata *u;
     pa_sink_input_assert_ref(i);
@@ -625,10 +675,16 @@ static void sink_input_update_sink_fixed_latency_cb(pa_sink_input *i) {
 }
 
 /* Called from I/O thread context */
-static void sink_input_detach_cb(pa_sink_input *i) {
+/**
+ * \brief   Callback used from IO thread context to detach an input from this
+ *          sink.
+ * \param   sink_input
+ */
+//TODO: document me better
+static void sink_input_detach_cb(pa_sink_input *sink_input) {
     struct userdata *u;
-    pa_sink_input_assert_ref(i);
-    pa_assert_se(u = i->userdata);
+    pa_sink_input_assert_ref(sink_input);
+    pa_assert_se(u = sink_input->userdata);
     pa_sink_detach_within_thread(u->sink);
     pa_sink_set_rtpoll(u->sink, NULL );
 }
@@ -655,7 +711,6 @@ static void sink_input_attach_cb(pa_sink_input *i) {
     pa_sink_attach_within_thread(u->sink);
 }
 
-/* Called from main context */
 /**
  * \fn sink_input_kill_cb
  * \brief   Callback used by main thread context to remove this sink's input.
@@ -751,7 +806,12 @@ static void sink_input_mute_changed_cb(pa_sink_input *i) {
     pa_sink_mute_changed(u->sink, i->muted);
 }
 
-int pa__init(pa_module *m) {
+/**
+ * \brief   Setup the sink.
+ * \param   module  pointer to this module
+ * \return  always returns 0
+ */
+int pa__init(pa_module *module) {
     struct userdata *u;
     pa_channel_map map;
     pa_modargs *ma;
@@ -762,14 +822,14 @@ int pa__init(pa_module *m) {
     pa_bool_t force_flat_volume = FALSE;
     pa_memchunk silence;
 
-    pa_assert(m);
+    pa_assert(module);
 
-    if (!(ma = pa_modargs_new(m->argument, valid_modargs))) {
+    if (!(ma = pa_modargs_new(module->argument, valid_modargs))) {
         pa_log("Failed to parse module arguments.");
         goto fail;
     }
 
-    if (!(master = pa_namereg_get(m->core,
+    if (!(master = pa_namereg_get(module->core,
                                   pa_modargs_get_value(ma, "master", NULL ),
                                   PA_NAMEREG_SINK))) {
         pa_log("Master sink not found");
@@ -858,13 +918,13 @@ int pa__init(pa_module *m) {
         goto fail;
     }
 
-    u->module = m;
-    m->userdata = u;
+    u->module = module;
+    module->userdata = u;
 
     /* Create sink */
     pa_sink_new_data_init(&sink_data);
     sink_data.driver = __FILE__;
-    sink_data.module = m;
+    sink_data.module = module;
     if (!(sink_data.name = pa_xstrdup(
             pa_modargs_get_value(ma, "sink_name", NULL )))) {
         sink_data.name = pa_sprintf_malloc("%s.lfe_lp", master->name);
@@ -895,7 +955,7 @@ int pa__init(pa_module *m) {
 
     // FIXME: should be PA_SINK_SHARE_VOLUME_WITH_MASTER not 0x1000000U
     u->sink = pa_sink_new(
-            m->core,
+            module->core,
             &sink_data,
             (master->flags & (PA_SINK_LATENCY | PA_SINK_DYNAMIC_LATENCY)) | (
                     use_volume_sharing ? 0x1000000U : 0));
@@ -925,7 +985,7 @@ int pa__init(pa_module *m) {
     /* Create sink input */
     pa_sink_input_new_data_init(&sink_input_data);
     sink_input_data.driver = __FILE__;
-    sink_input_data.module = m;
+    sink_input_data.module = module;
     pa_sink_input_new_data_set_sink(&sink_input_data, master, FALSE );
     sink_input_data.origin_sink = u->sink;
     pa_proplist_setf(
@@ -936,7 +996,7 @@ int pa__init(pa_module *m) {
     pa_sink_input_new_data_set_sample_spec(&sink_input_data, &u->sample_spec);
     pa_sink_input_new_data_set_channel_map(&sink_input_data, &map);
 
-    pa_sink_input_new(&u->sink_input, m->core, &sink_input_data);
+    pa_sink_input_new(&u->sink_input, module->core, &sink_input_data);
     pa_sink_input_new_data_done(&sink_input_data);
 
     if (!u->sink_input)
@@ -988,10 +1048,15 @@ int pa__init(pa_module *m) {
 
     fail: if (ma)
         pa_modargs_free(ma);
-    pa__done(m);
+    pa__done(module);
     return(-1);
 }
 
+/**
+ * \brief   Return the number of objects linked with this sink.
+ * \param   module  pointer to this module
+ * \return  number of objects linked with this sink
+ */
 int pa__get_n_used(pa_module *m) {
     struct userdata *u;
     pa_assert(m);
