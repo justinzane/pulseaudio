@@ -105,9 +105,9 @@ typedef struct biquad_data_element {
  * \var buffer  the buffer
  */
 typedef struct biquad_history {
-    u_int64_t idx;
-    u_int64_t start;
-    u_int64_t length;
+    size_t idx;
+    size_t start;
+    size_t length;
     biquad_data_element *buffer;
 } biquad_history;
 
@@ -189,7 +189,6 @@ static float filter_biquad (struct biquad_data *bqdt, struct biquad_factors bqfs
     (*bqdt).w1 = (*bqdt).w0;
     (*bqdt).y2 = (*bqdt).y1;
     (*bqdt).y1 = (*bqdt).y0;
-
 
     return((float)(*bqdt).y0);
 }
@@ -308,7 +307,8 @@ static void filter_init_bqdt (pa_sink *sink) {
  * \param [in/out]  sink    pointer to this sink
  * \param [in]      bqdtel  pointer to the biquad_data_element to be stored
  */
-static void filter_store_history (pa_sink *sink, biquad_data_element *bqdtel) {
+static void filter_store_history (pa_sink *sink,
+                                  biquad_data_element *bqdtel) {
     struct userdata *u;
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
@@ -485,6 +485,7 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
     float ap = 0.0f;
     size_t framesize;
     unsigned num_frames, frm_idx, chan_idx;
+    biquad_data_element bqdtel;
     pa_memchunk tchunk;
 
     pa_sink_input_assert_ref(sink_input);
@@ -529,14 +530,23 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
             if (u->filter_map[chan_idx] == 'l') {
                 lp = filter_biquad(&(u->lpdt[chan_idx]), *(u->lpfs), cur_sample);
                 *dst_sample = filter_biquad(&(u->lpdt[chan_idx]), *(u->lpfs), &lp);
+                bqdtel.w0 = u->lpdt[chan_idx].w0;
+                bqdtel.y0 = u->lpdt[chan_idx].y0;
+                filter_store_history(u->sink, &bqdtel);
             } else
             if (u->filter_map[chan_idx] == 'h') {
                 hp = filter_biquad(&(u->hpdt[chan_idx]), *(u->hpfs), cur_sample);
                 *dst_sample = filter_biquad(&(u->hpdt[chan_idx]), *(u->hpfs), &hp);
+                bqdtel.w0 = u->hpdt[chan_idx].w0;
+                bqdtel.y0 = u->hpdt[chan_idx].y0;
+                filter_store_history(u->sink, &bqdtel);
             } else
             if (u->filter_map[chan_idx] == 'a') {
                 ap = filter_biquad(&(u->apdt[chan_idx]), *(u->apfs), cur_sample);
                 *dst_sample = filter_biquad(&(u->apdt[chan_idx]), *(u->apfs), &ap);
+                bqdtel.w0 = u->apdt[chan_idx].w0;
+                bqdtel.y0 = u->apdt[chan_idx].y0;
+                filter_store_history(u->sink, &bqdtel);
             } else {
                 pa_log_error("JZ %s[%d] Should never get here, even in Jersey.",
                              __FILE__, __LINE__);
@@ -558,14 +568,14 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
  * \param [in] sink_input       pointer to the sink input
  * \param [in] rewind_bytes     number of bytes to rewind
  */
-//TODO: make me work with biquad history
 static void sink_input_process_rewind_cb(pa_sink_input *sink_input,
                                          size_t rewind_bytes) {
     struct userdata *u;
     size_t amount = 0;
     size_t rewind_frames = 0;
     size_t rewind_samples = 0;
-    size_t max_rewrite;
+    size_t max_rewrite = 0;
+    size_t frame_size = 0;
     unsigned int i = 0;
 
     pa_sink_input_assert_ref(sink_input);
@@ -587,12 +597,47 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input,
             rewind_samples = rewind_frames * u->sample_spec.channels;
             // check if we have to wrap the ring buffer backwards.
             if (u->rewind_buf->idx > rewind_samples) {
-                //we're
+                //we're cool, no wrap required
+                u->rewind_buf->idx -= rewind_samples;
+            } else {
+                //doh! gotta wrap.
+                u->rewind_buf->idx = u->rewind_buf->length -
+                                     (rewind_samples - u->rewind_buf->idx);
             }
+            frame_size = u->sample_spec.channels * sizeof(biquad_data_element);
             for (i=0; i < u->sample_spec.channels; i++) {
-
+                switch (u->filter_map[i]) {
+                    case 'l': {
+                        u->lpdt[i].w2 = u->rewind_buf->buffer[i].w0;
+                        u->lpdt[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
+                        u->lpdt[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
+                        u->lpdt[i].y2 = u->rewind_buf->buffer[i].y0;
+                        u->lpdt[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
+                        u->lpdt[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
+                        break;
+                    }
+                    case 'h': {
+                        u->hpdt[i].w2 = u->rewind_buf->buffer[i].w0;
+                        u->hpdt[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
+                        u->hpdt[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
+                        u->hpdt[i].y2 = u->rewind_buf->buffer[i].y0;
+                        u->hpdt[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
+                        u->hpdt[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
+                        break;
+                    }
+                    case 'a': {
+                        u->apdt[i].w2 = u->rewind_buf->buffer[i].w0;
+                        u->apdt[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
+                        u->apdt[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
+                        u->apdt[i].y2 = u->rewind_buf->buffer[i].y0;
+                        u->apdt[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
+                        u->apdt[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
+                        break;
+                    }
+                }
             }
-
+            // move the buffer forward 2 frames so we can write right
+            u->rewind_buf->idx += frame_size;
         }
     }
 
