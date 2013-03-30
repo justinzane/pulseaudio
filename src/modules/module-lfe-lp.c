@@ -146,7 +146,7 @@ struct userdata {
     /** \var lowpass, highpass and allpass coefficients, respectively */
     struct biquad_factors *lpfs, *hpfs, *apfs;
     /** \var history data for the various filters */
-    struct biquad_data *lpdt, *hpdt, *apdt;
+    struct biquad_data *lpdt0, *hpdt0, *apdt0, *lpdt1, *hpdt1, *apdt1;
     /** \var rewind buffer for biquad_data */
     struct biquad_history *rewind_buf;
     /** \var map of channels index to 'l','h' or 'a' to indicate filter type */
@@ -203,12 +203,13 @@ static float filter_biquad (struct biquad_data *bqdt, struct biquad_factors bqfs
  */
 static void filter_calc_factors(pa_sink *sink) {
     struct userdata *u;
-    double w0,Q,alpha;
+    double w0, Q, alpha;
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
 
     w0 = 2.0 * PI * u->lpfreq / (double)u->sample_spec.rate;
-    Q = sqrt(2.0)/2.0;
+    //Q = sqrt(2.0)/2.0;
+    Q = 0.5;
     alpha = sin(w0) / (2.0 * Q);
 
     u->lpfs->a0 = (1.0 + alpha);
@@ -276,9 +277,12 @@ static void filter_init_bqdt (pa_sink *sink) {
         bqdt.y0 = 0.0;
         bqdt.y1 = 0.0;
         bqdt.y2 = 0.0;
-        u->lpdt[i] = bqdt;
-        u->hpdt[i] = bqdt;
-        u->apdt[i] = bqdt;
+        u->lpdt0[i] = bqdt;
+        u->hpdt0[i] = bqdt;
+        u->apdt0[i] = bqdt;
+        u->lpdt1[i] = bqdt;
+        u->hpdt1[i] = bqdt;
+        u->apdt1[i] = bqdt;
     }
 }
 
@@ -510,24 +514,33 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
             cur_sample = cur_frame + chan_idx;
             dst_sample = dst_frame + chan_idx;
             if (u->filter_map[chan_idx] == 'l') {
-                lp = filter_biquad(&(u->lpdt[chan_idx]), *(u->lpfs), cur_sample);
-                *dst_sample = filter_biquad(&(u->lpdt[chan_idx]), *(u->lpfs), &lp);
-                bqdtel.w0 = u->lpdt[chan_idx].w0;
-                bqdtel.y0 = u->lpdt[chan_idx].y0;
+                lp = filter_biquad(&(u->lpdt0[chan_idx]), *(u->lpfs), cur_sample);
+                bqdtel.w0 = u->lpdt0[chan_idx].w0;
+                bqdtel.y0 = u->lpdt0[chan_idx].y0;
+                filter_store_history(u->sink, &bqdtel);
+                *dst_sample = filter_biquad(&(u->lpdt1[chan_idx]), *(u->lpfs), &lp);
+                bqdtel.w0 = u->lpdt1[chan_idx].w0;
+                bqdtel.y0 = u->lpdt1[chan_idx].y0;
                 filter_store_history(u->sink, &bqdtel);
             } else
             if (u->filter_map[chan_idx] == 'h') {
-                hp = filter_biquad(&(u->hpdt[chan_idx]), *(u->hpfs), cur_sample);
-                *dst_sample = filter_biquad(&(u->hpdt[chan_idx]), *(u->hpfs), &hp);
-                bqdtel.w0 = u->hpdt[chan_idx].w0;
-                bqdtel.y0 = u->hpdt[chan_idx].y0;
+                hp = filter_biquad(&(u->hpdt0[chan_idx]), *(u->hpfs), cur_sample);
+                bqdtel.w0 = u->hpdt0[chan_idx].w0;
+                bqdtel.y0 = u->hpdt0[chan_idx].y0;
+                filter_store_history(u->sink, &bqdtel);
+                *dst_sample = filter_biquad(&(u->hpdt1[chan_idx]), *(u->hpfs), &hp);
+                bqdtel.w0 = u->hpdt1[chan_idx].w0;
+                bqdtel.y0 = u->hpdt1[chan_idx].y0;
                 filter_store_history(u->sink, &bqdtel);
             } else
             if (u->filter_map[chan_idx] == 'a') {
-                ap = filter_biquad(&(u->apdt[chan_idx]), *(u->apfs), cur_sample);
-                *dst_sample = filter_biquad(&(u->apdt[chan_idx]), *(u->apfs), &ap);
-                bqdtel.w0 = u->apdt[chan_idx].w0;
-                bqdtel.y0 = u->apdt[chan_idx].y0;
+                ap = filter_biquad(&(u->apdt0[chan_idx]), *(u->apfs), cur_sample);
+                bqdtel.w0 = u->apdt0[chan_idx].w0;
+                bqdtel.y0 = u->apdt0[chan_idx].y0;
+                filter_store_history(u->sink, &bqdtel);
+                *dst_sample = filter_biquad(&(u->apdt1[chan_idx]), *(u->apfs), &ap);
+                bqdtel.w0 = u->apdt1[chan_idx].w0;
+                bqdtel.y0 = u->apdt1[chan_idx].y0;
                 filter_store_history(u->sink, &bqdtel);
             } else {
                 pa_log_error("JZ %s[%d] Should never get here, even in Jersey.",
@@ -574,8 +587,8 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input,
             /* (5) PUT YOUR CODE HERE TO REWIND YOUR FILTER  */
             rewind_samples = amount / pa_sample_size_of_format(u->sample_spec.format);
             rewind_frames = rewind_samples / u->sample_spec.channels;
-            // add the 2 frame backlog for the biquad
-            rewind_frames += 2;
+            // add the 4 frame backlog for the biquad
+            rewind_frames += 4;
             rewind_samples = rewind_frames * u->sample_spec.channels;
             // check if we have to wrap the ring buffer backwards.
             if (u->rewind_buf->idx > rewind_samples) {
@@ -590,36 +603,54 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input,
             for (i=0; i < u->sample_spec.channels; i++) {
                 switch (u->filter_map[i]) {
                     case 'l': {
-                        u->lpdt[i].w2 = u->rewind_buf->buffer[i].w0;
-                        u->lpdt[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
-                        u->lpdt[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
-                        u->lpdt[i].y2 = u->rewind_buf->buffer[i].y0;
-                        u->lpdt[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
-                        u->lpdt[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
+                        u->lpdt0[i].w2 = u->rewind_buf->buffer[i].w0;
+                        u->lpdt1[i].w2 = u->rewind_buf->buffer[i].w0;
+                        u->lpdt0[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
+                        u->lpdt1[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
+                        u->lpdt0[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
+                        u->lpdt1[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
+                        u->lpdt0[i].y2 = u->rewind_buf->buffer[i].y0;
+                        u->lpdt1[i].y2 = u->rewind_buf->buffer[i].y0;
+                        u->lpdt0[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
+                        u->lpdt1[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
+                        u->lpdt0[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
+                        u->lpdt1[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
                         break;
                     }
                     case 'h': {
-                        u->hpdt[i].w2 = u->rewind_buf->buffer[i].w0;
-                        u->hpdt[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
-                        u->hpdt[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
-                        u->hpdt[i].y2 = u->rewind_buf->buffer[i].y0;
-                        u->hpdt[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
-                        u->hpdt[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
+                        u->hpdt0[i].w2 = u->rewind_buf->buffer[i].w0;
+                        u->hpdt1[i].w2 = u->rewind_buf->buffer[i].w0;
+                        u->hpdt0[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
+                        u->hpdt1[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
+                        u->hpdt0[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
+                        u->hpdt1[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
+                        u->hpdt0[i].y2 = u->rewind_buf->buffer[i].y0;
+                        u->hpdt1[i].y2 = u->rewind_buf->buffer[i].y0;
+                        u->hpdt0[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
+                        u->hpdt1[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
+                        u->hpdt0[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
+                        u->hpdt1[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
                         break;
                     }
                     case 'a': {
-                        u->apdt[i].w2 = u->rewind_buf->buffer[i].w0;
-                        u->apdt[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
-                        u->apdt[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
-                        u->apdt[i].y2 = u->rewind_buf->buffer[i].y0;
-                        u->apdt[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
-                        u->apdt[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
+                        u->apdt0[i].w2 = u->rewind_buf->buffer[i].w0;
+                        u->apdt1[i].w2 = u->rewind_buf->buffer[i].w0;
+                        u->apdt0[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
+                        u->apdt1[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
+                        u->apdt0[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
+                        u->apdt1[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
+                        u->apdt0[i].y2 = u->rewind_buf->buffer[i].y0;
+                        u->apdt1[i].y2 = u->rewind_buf->buffer[i].y0;
+                        u->apdt0[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
+                        u->apdt1[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
+                        u->apdt0[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
+                        u->apdt1[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
                         break;
                     }
                 }
             }
             // move the buffer forward 2 frames so we can write right
-            u->rewind_buf->idx += frame_size;
+            u->rewind_buf->idx += 4 * frame_size;
         }
     }
 
@@ -646,7 +677,7 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input,
     if ((max_rewind / pa_frame_size(&(u->sample_spec))) < MIN_REWIND_FRAMES) {
         if (max_rewind == u->sink->thread_info.max_rewind)
             pa_log("JZ: %s[%d] sink_input_update_max_rewind_cb called "
-                   "without changing size.\n\tmax_rewind=%u",
+                   "without changing size.\n\tmax_rewind=%lu",
                    __FILE__, __LINE__, max_rewind);
         // This is an attempt to prevent excessive realloc shrinks and grows
         return;
@@ -654,15 +685,15 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input,
 
     // grow u->rewind_buf to the new size
     if (max_rewind > u->sink->thread_info.max_rewind) {
-        // convert to num samples
-        growth = (max_rewind /
+        // convert to num samples recalling that we are storing 2 per iteration
+        growth = (2 * max_rewind /
                   pa_sample_size_of_format(u->sample_spec.format)) -
                  u->rewind_buf->length;
-        pa_log_error("JZ: %s[%d]\n\tmax_rewind=%u, growth=%u, idx=%u, length=%u",
+        pa_log_error("JZ: %s[%d]\n\tmax_rewind=%lu, growth=%lu, idx=%lu, length=%lu",
                      __FILE__, __LINE__, max_rewind, growth,
                      u->rewind_buf->idx, u->rewind_buf->length);
         u->rewind_buf = realloc(u->rewind_buf,
-                                (sizeof(biquad_data_element) *
+                                2 * (sizeof(biquad_data_element) *
                                 (u->rewind_buf->length + growth)));
         for (i=u->rewind_buf->length; i<(u->rewind_buf->length+growth); i++) {
             u->rewind_buf->buffer[i].w0 = 0.0;
@@ -674,15 +705,15 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input,
     // shrink to new size
     if (max_rewind < u->sink->thread_info.max_rewind) {
         // convert to num samples
-        shrinkage = u->sink->thread_info.max_rewind -
-                    (max_rewind /
-                     pa_sample_size_of_format(u->sample_spec.format));
+        shrinkage = 2 * (u->sink->thread_info.max_rewind -
+                         (max_rewind /
+                          pa_sample_size_of_format(u->sample_spec.format)));
         // loop through and move everybody back by shrinkage
-        pa_log_error("JZ: %s[%d]\n\tmax_rewind=%u, shrinkage=%u, idx=%u, length=%u",
+        pa_log_error("JZ: %s[%d]\n\tmax_rewind=%lu, shrinkage=%lu, idx=%lu, length=%lu",
                      __FILE__, __LINE__, max_rewind, shrinkage,
                      u->rewind_buf->idx, u->rewind_buf->length);
         for (i=0; i<shrinkage; i++) {
-            pa_log_error("\ti=%d",i);
+            pa_log_error("\ti=%lu",i);
             u->rewind_buf->buffer[i + (u->rewind_buf->length - shrinkage)] =
                     u->rewind_buf->buffer[i];
         }
@@ -691,7 +722,7 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input,
         }
         u->rewind_buf->length -= shrinkage;
         u->rewind_buf = realloc(u->rewind_buf,
-                                (sizeof(biquad_data_element) *
+                                2 * (sizeof(biquad_data_element) *
                                 u->rewind_buf->length));
         if (u->rewind_buf->idx > shrinkage)
             u->rewind_buf->idx -= shrinkage;
@@ -748,11 +779,9 @@ static void sink_input_update_sink_fixed_latency_cb(pa_sink_input *i) {
                                             i->sink->thread_info.fixed_latency);
 }
 
-/* Called from I/O thread context */
 /**
- * \brief   Callback used from IO thread context to detach an input from this
- *          sink.
- * \param   sink_input
+ * \brief Callback used from IO thread context to detach an input from this sink.
+ * \param sink_input
  */
 //TODO: document me better
 static void sink_input_detach_cb(pa_sink_input *sink_input) {
@@ -811,18 +840,19 @@ static void sink_input_kill_cb(pa_sink_input *sink_input) {
     pa_module_unload_request(u->module, TRUE );
 }
 
-/* Called from IO thread context */
-static void sink_input_state_change_cb(pa_sink_input *i,
+/**
+ * \brief   Callback called from IO thread. Does rewind if input is just added
+ *          so that we are heard immediately.
+ */
+static void sink_input_state_change_cb(pa_sink_input *sink_input,
                                        pa_sink_input_state_t state) {
     struct userdata *u;
-    pa_sink_input_assert_ref(i);
-    pa_assert_se(u = i->userdata);
-    /* If we are added for the first time, ask for a rewinding so that we are
-     * heard right-away. */
-    if (PA_SINK_INPUT_IS_LINKED(state) && i->thread_info.state
-            == PA_SINK_INPUT_INIT) {
-        pa_log_debug("Requesting rewind due to state change.");
-        pa_sink_input_request_rewind(i, 0, FALSE, TRUE, TRUE );
+    pa_sink_input_assert_ref(sink_input);
+    pa_assert_se(u = sink_input->userdata);
+
+    if (PA_SINK_INPUT_IS_LINKED(state) &&
+        (sink_input->thread_info.state == PA_SINK_INPUT_INIT)) {
+        pa_sink_input_request_rewind(sink_input, 0, FALSE, TRUE, TRUE );
     }
 }
 
@@ -1108,16 +1138,19 @@ int pa__init(pa_module *module) {
     u->lpfs = malloc(sizeof(biquad_factors));
     u->hpfs = malloc(sizeof(biquad_factors));
     u->apfs = malloc(sizeof(biquad_factors));
-    u->lpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->hpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->apdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->lpdt0 = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->lpdt1 = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->hpdt0 = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->hpdt1 = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->apdt0 = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->apdt1 = malloc(u->sample_spec.channels * sizeof(biquad_data));
     u->rewind_buf = malloc(4 * sizeof(size_t));
     if ((u->sink->thread_info.max_rewind /
         (pa_sample_size_of_format(u->sample_spec.format) /
          u->sample_spec.channels)) < MIN_REWIND_FRAMES) {
-        u->rewind_buf->length = MIN_REWIND_FRAMES * u->sample_spec.channels;
+        u->rewind_buf->length = MIN_REWIND_FRAMES * u->sample_spec.channels * 2;
     } else {
-        u->rewind_buf->length = u->sink->thread_info.max_rewind /
+        u->rewind_buf->length = 2 * u->sink->thread_info.max_rewind /
                                 pa_sample_size_of_format(u->sample_spec.format);
     }
     u->rewind_buf->idx = 0;
@@ -1171,12 +1204,18 @@ void pa__done(pa_module*m) {
         free(u->hpfs);
     if (u->apfs)
         free(u->apfs);
-    if (u->lpdt)
-        free(u->lpdt);
-    if (u->hpdt)
-        free(u->hpdt);
-    if (u->apdt)
-        free(u->apdt);
+    if (u->lpdt0)
+        free(u->lpdt0);
+    if (u->hpdt0)
+        free(u->hpdt0);
+    if (u->apdt0)
+        free(u->apdt0);
+    if (u->lpdt1)
+        free(u->lpdt1);
+    if (u->hpdt1)
+        free(u->hpdt1);
+    if (u->apdt1)
+        free(u->apdt1);
     if ((*(u->rewind_buf)).buffer)
         free((*(u->rewind_buf)).buffer);
     if (u->rewind_buf)
