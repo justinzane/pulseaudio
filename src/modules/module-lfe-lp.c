@@ -102,7 +102,7 @@ typedef struct biquad_data_element {
  * \brief  holds the rewind history of filter data
  * \var idx     the current position in the buffer
  * \var start   the initial position in the buffer
- * \var length  the length, in sizeof(biquad_data) of the buffer
+ * \var length  the length, in samples, sizeof(biquad_data), of the buffer
  * \var buffer  the buffer
  */
 typedef struct biquad_history {
@@ -141,17 +141,23 @@ struct userdata {
     pa_memblockq *memblockq;
     pa_bool_t auto_desc;
     pa_sample_spec sample_spec;
+    size_t sz_smp, sz_frm, sz_bqf;
     /** \var corner/cutoff frequency, user defined */
     double lpfreq;
     /** \var lowpass, highpass and allpass coefficients, respectively */
     struct biquad_factors *lpfs, *hpfs, *apfs;
-    /** \var history data for the various filters */
-    struct biquad_data *lpdt0, *hpdt0, *apdt0, *lpdt1, *hpdt1, *apdt1;
-    /** \var rewind buffer for biquad_data */
-    struct biquad_history *rewind_buf;
+    /** \var history data for the various filters stage 1*/
+    struct biquad_data *s1lpdt, *s1hpdt, *s1apdt;
+    /** \var rewind buffer for biquad_data stage 1*/
+    struct biquad_history *s1histbuf;
+    /** \var history data for the various filters stage 1*/
+    struct biquad_data *s2lpdt, *s2hpdt, *s2apdt;
+    /** \var rewind buffer for biquad_data stage 2*/
+    struct biquad_history *s2histbuf;
     /** \var map of channels index to 'l','h' or 'a' to indicate filter type */
     char filter_map[PA_CHANNELS_MAX];
 };
+
 
 /**
  * \brief do the filtering
@@ -203,13 +209,12 @@ static float filter_biquad (struct biquad_data *bqdt, struct biquad_factors bqfs
  */
 static void filter_calc_factors(pa_sink *sink) {
     struct userdata *u;
-    double w0, Q, alpha;
+    double w0,Q,alpha;
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
 
     w0 = 2.0 * PI * u->lpfreq / (double)u->sample_spec.rate;
-    //Q = sqrt(2.0)/2.0;
-    Q = 0.5;
+    Q = sqrt(2.0)/2.0;
     alpha = sin(w0) / (2.0 * Q);
 
     u->lpfs->a0 = (1.0 + alpha);
@@ -259,49 +264,50 @@ static void filter_calc_factors(pa_sink *sink) {
     return;
 }
 
-/**
- * \brief initialize filter history data to 0.0
- * \param [in/out]  sink    this sink
- */
+/** \brief initialize filter history data to 0.0 */
 static void filter_init_bqdt (pa_sink *sink) {
     struct userdata *u;
-    unsigned int i;
+    size_t i;
     struct biquad_data bqdt;
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
 
     for (i=0; i<u->sample_spec.channels; i++) {
-        bqdt.w0 = 0.0;
-        bqdt.w1 = 0.0;
-        bqdt.w2 = 0.0;
-        bqdt.y0 = 0.0;
-        bqdt.y1 = 0.0;
-        bqdt.y2 = 0.0;
-        u->lpdt0[i] = bqdt;
-        u->hpdt0[i] = bqdt;
-        u->apdt0[i] = bqdt;
-        u->lpdt1[i] = bqdt;
-        u->hpdt1[i] = bqdt;
-        u->apdt1[i] = bqdt;
+        bqdt.w0 = 0.0; bqdt.w1 = 0.0; bqdt.w2 = 0.0;
+        bqdt.y0 = 0.0; bqdt.y1 = 0.0; bqdt.y2 = 0.0;
+        u->s1lpdt[i] = bqdt; u->s1hpdt[i] = bqdt; u->s1apdt[i] = bqdt;
+        u->s2lpdt[i] = bqdt; u->s2hpdt[i] = bqdt; u->s2apdt[i] = bqdt;
     }
 }
 
-/**
- * \brief store a biquad_data_element struct in the history buffer so that we
- *        can rewind without audio inconsistencies.
- * \param [in/out]  sink    pointer to this sink
- * \param [in]      bqdtel  pointer to the biquad_data_element to be stored
- */
+/**\brief store a biquad_data_element struct in the history buffer so that we
+ *        can rewind without audio inconsistencies. "stage" parameter must be
+ *        either 1 or 2. */
 static void filter_store_history (pa_sink *sink,
-                                  biquad_data_element *bqdtel) {
+                                  biquad_data_element *bqdtel,
+                                  unsigned int stage) {
     struct userdata *u;
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
 
-    u->rewind_buf->buffer[u->rewind_buf->idx] = *bqdtel;
-    u->rewind_buf->idx += 1;
-    if (u->rewind_buf->idx >= u->rewind_buf->length)
-        u->rewind_buf->idx = 0;
+    switch (stage) {
+        case 1: {
+            u->s1histbuf->buffer[u->s1histbuf->idx] = *bqdtel;
+            u->s1histbuf->idx += 1;
+            if (u->s1histbuf->idx >= u->s1histbuf->length)
+                u->s1histbuf->idx = 0;
+            break;
+        }
+        case 2: {
+            u->s2histbuf->buffer[u->s2histbuf->idx] = *bqdtel;
+            u->s2histbuf->idx += 1;
+            if (u->s2histbuf->idx >= u->s2histbuf->length)
+                u->s2histbuf->idx = 0;
+            break;
+        }
+        default:
+            pa_log_error("Calls to filter_store_history must have stage = 1 or 2.");
+    }
 }
 
 /**
@@ -420,7 +426,6 @@ static void sink_update_requested_latency_cb(pa_sink *sink) {
 //TODO: Remove me safely.
 static void sink_set_volume_cb(pa_sink *sink) {
     struct userdata *u;
-
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
 
@@ -514,37 +519,42 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
             cur_sample = cur_frame + chan_idx;
             dst_sample = dst_frame + chan_idx;
             if (u->filter_map[chan_idx] == 'l') {
-                lp = filter_biquad(&(u->lpdt0[chan_idx]), *(u->lpfs), cur_sample);
-                bqdtel.w0 = u->lpdt0[chan_idx].w0;
-                bqdtel.y0 = u->lpdt0[chan_idx].y0;
-                filter_store_history(u->sink, &bqdtel);
-                *dst_sample = filter_biquad(&(u->lpdt1[chan_idx]), *(u->lpfs), &lp);
-                bqdtel.w0 = u->lpdt1[chan_idx].w0;
-                bqdtel.y0 = u->lpdt1[chan_idx].y0;
-                filter_store_history(u->sink, &bqdtel);
+                // stage 1
+                lp = filter_biquad(&(u->s1lpdt[chan_idx]), *(u->lpfs), cur_sample);
+                bqdtel.w0 = u->s1lpdt[chan_idx].w0;
+                bqdtel.y0 = u->s1lpdt[chan_idx].y0;
+                filter_store_history(u->sink, &bqdtel, 1);
+                // stage 2
+                *dst_sample = filter_biquad(&(u->s2lpdt[chan_idx]), *(u->lpfs), &lp);
+                bqdtel.w0 = u->s2lpdt[chan_idx].w0;
+                bqdtel.y0 = u->s2lpdt[chan_idx].y0;
+                filter_store_history(u->sink, &bqdtel, 2);
             } else
             if (u->filter_map[chan_idx] == 'h') {
-                hp = filter_biquad(&(u->hpdt0[chan_idx]), *(u->hpfs), cur_sample);
-                bqdtel.w0 = u->hpdt0[chan_idx].w0;
-                bqdtel.y0 = u->hpdt0[chan_idx].y0;
-                filter_store_history(u->sink, &bqdtel);
-                *dst_sample = filter_biquad(&(u->hpdt1[chan_idx]), *(u->hpfs), &hp);
-                bqdtel.w0 = u->hpdt1[chan_idx].w0;
-                bqdtel.y0 = u->hpdt1[chan_idx].y0;
-                filter_store_history(u->sink, &bqdtel);
+                // stage 1
+                hp = filter_biquad(&(u->s1hpdt[chan_idx]), *(u->hpfs), cur_sample);
+                bqdtel.w0 = u->s1hpdt[chan_idx].w0;
+                bqdtel.y0 = u->s1hpdt[chan_idx].y0;
+                filter_store_history(u->sink, &bqdtel, 1);
+                // stage 2
+                *dst_sample = filter_biquad(&(u->s2hpdt[chan_idx]), *(u->hpfs), &hp);
+                bqdtel.w0 = u->s2hpdt[chan_idx].w0;
+                bqdtel.y0 = u->s2hpdt[chan_idx].y0;
+                filter_store_history(u->sink, &bqdtel, 2);
             } else
             if (u->filter_map[chan_idx] == 'a') {
-                ap = filter_biquad(&(u->apdt0[chan_idx]), *(u->apfs), cur_sample);
-                bqdtel.w0 = u->apdt0[chan_idx].w0;
-                bqdtel.y0 = u->apdt0[chan_idx].y0;
-                filter_store_history(u->sink, &bqdtel);
-                *dst_sample = filter_biquad(&(u->apdt1[chan_idx]), *(u->apfs), &ap);
-                bqdtel.w0 = u->apdt1[chan_idx].w0;
-                bqdtel.y0 = u->apdt1[chan_idx].y0;
-                filter_store_history(u->sink, &bqdtel);
+                // stage 1
+                ap = filter_biquad(&(u->s1apdt[chan_idx]), *(u->apfs), cur_sample);
+                bqdtel.w0 = u->s1apdt[chan_idx].w0;
+                bqdtel.y0 = u->s1apdt[chan_idx].y0;
+                filter_store_history(u->sink, &bqdtel, 1);
+                // stage 2
+                *dst_sample = filter_biquad(&(u->s2apdt[chan_idx]), *(u->apfs), &ap);
+                bqdtel.w0 = u->s2apdt[chan_idx].w0;
+                bqdtel.y0 = u->s2apdt[chan_idx].y0;
+                filter_store_history(u->sink, &bqdtel, 2);
             } else {
-                pa_log_error("JZ %s[%d] Should never get here, even in Jersey.",
-                             __FILE__, __LINE__);
+                pa_log_error("Should never get here, even in Jersey.");
             }
         }
     }
@@ -587,70 +597,77 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input,
             /* (5) PUT YOUR CODE HERE TO REWIND YOUR FILTER  */
             rewind_samples = amount / pa_sample_size_of_format(u->sample_spec.format);
             rewind_frames = rewind_samples / u->sample_spec.channels;
-            // add the 4 frame backlog for the biquad
-            rewind_frames += 4;
+            // add the 2 frame backlog for the biquad
+            rewind_frames += 2;
             rewind_samples = rewind_frames * u->sample_spec.channels;
             // check if we have to wrap the ring buffer backwards.
-            if (u->rewind_buf->idx > rewind_samples) {
+            if (u->s1histbuf->idx > rewind_samples) {
                 //we're cool, no wrap required
-                u->rewind_buf->idx -= rewind_samples;
+                u->s1histbuf->idx -= rewind_samples;
             } else {
                 //doh! gotta wrap.
-                u->rewind_buf->idx = u->rewind_buf->length -
-                                     (rewind_samples - u->rewind_buf->idx);
+                u->s1histbuf->idx = u->s1histbuf->length -
+                                     (rewind_samples - u->s1histbuf->idx);
             }
             frame_size = u->sample_spec.channels * sizeof(biquad_data_element);
             for (i=0; i < u->sample_spec.channels; i++) {
                 switch (u->filter_map[i]) {
                     case 'l': {
-                        u->lpdt0[i].w2 = u->rewind_buf->buffer[i].w0;
-                        u->lpdt1[i].w2 = u->rewind_buf->buffer[i].w0;
-                        u->lpdt0[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
-                        u->lpdt1[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
-                        u->lpdt0[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
-                        u->lpdt1[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
-                        u->lpdt0[i].y2 = u->rewind_buf->buffer[i].y0;
-                        u->lpdt1[i].y2 = u->rewind_buf->buffer[i].y0;
-                        u->lpdt0[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
-                        u->lpdt1[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
-                        u->lpdt0[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
-                        u->lpdt1[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
+                        // stage 1
+                        u->s1lpdt[i].w2 = u->s1histbuf->buffer[i].w0;
+                        u->s1lpdt[i].w1 = u->s1histbuf->buffer[i+frame_size].w0;
+                        u->s1lpdt[i].w0 = u->s1histbuf->buffer[i+2*frame_size].w0;
+                        u->s1lpdt[i].y2 = u->s1histbuf->buffer[i].y0;
+                        u->s1lpdt[i].y1 = u->s1histbuf->buffer[i+frame_size].y0;
+                        u->s1lpdt[i].y0 = u->s1histbuf->buffer[i+2*frame_size].y0;
+                        // stage 2
+                        u->s2lpdt[i].w2 = u->s1histbuf->buffer[i].w0;
+                        u->s2lpdt[i].w1 = u->s1histbuf->buffer[i+frame_size].w0;
+                        u->s2lpdt[i].w0 = u->s1histbuf->buffer[i+2*frame_size].w0;
+                        u->s2lpdt[i].y2 = u->s1histbuf->buffer[i].y0;
+                        u->s2lpdt[i].y1 = u->s1histbuf->buffer[i+frame_size].y0;
+                        u->s2lpdt[i].y0 = u->s1histbuf->buffer[i+2*frame_size].y0;
                         break;
                     }
                     case 'h': {
-                        u->hpdt0[i].w2 = u->rewind_buf->buffer[i].w0;
-                        u->hpdt1[i].w2 = u->rewind_buf->buffer[i].w0;
-                        u->hpdt0[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
-                        u->hpdt1[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
-                        u->hpdt0[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
-                        u->hpdt1[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
-                        u->hpdt0[i].y2 = u->rewind_buf->buffer[i].y0;
-                        u->hpdt1[i].y2 = u->rewind_buf->buffer[i].y0;
-                        u->hpdt0[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
-                        u->hpdt1[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
-                        u->hpdt0[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
-                        u->hpdt1[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
+                        // stage 1
+                        u->s1hpdt[i].w2 = u->s1histbuf->buffer[i].w0;
+                        u->s1hpdt[i].w1 = u->s1histbuf->buffer[i+frame_size].w0;
+                        u->s1hpdt[i].w0 = u->s1histbuf->buffer[i+2*frame_size].w0;
+                        u->s1hpdt[i].y2 = u->s1histbuf->buffer[i].y0;
+                        u->s1hpdt[i].y1 = u->s1histbuf->buffer[i+frame_size].y0;
+                        u->s1hpdt[i].y0 = u->s1histbuf->buffer[i+2*frame_size].y0;
+                        // stage 2
+                        u->s2hpdt[i].w2 = u->s1histbuf->buffer[i].w0;
+                        u->s2hpdt[i].w1 = u->s1histbuf->buffer[i+frame_size].w0;
+                        u->s2hpdt[i].w0 = u->s1histbuf->buffer[i+2*frame_size].w0;
+                        u->s2hpdt[i].y2 = u->s1histbuf->buffer[i].y0;
+                        u->s2hpdt[i].y1 = u->s1histbuf->buffer[i+frame_size].y0;
+                        u->s2hpdt[i].y0 = u->s1histbuf->buffer[i+2*frame_size].y0;
                         break;
                     }
                     case 'a': {
-                        u->apdt0[i].w2 = u->rewind_buf->buffer[i].w0;
-                        u->apdt1[i].w2 = u->rewind_buf->buffer[i].w0;
-                        u->apdt0[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
-                        u->apdt1[i].w1 = u->rewind_buf->buffer[i+frame_size].w0;
-                        u->apdt0[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
-                        u->apdt1[i].w0 = u->rewind_buf->buffer[i+2*frame_size].w0;
-                        u->apdt0[i].y2 = u->rewind_buf->buffer[i].y0;
-                        u->apdt1[i].y2 = u->rewind_buf->buffer[i].y0;
-                        u->apdt0[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
-                        u->apdt1[i].y1 = u->rewind_buf->buffer[i+frame_size].y0;
-                        u->apdt0[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
-                        u->apdt1[i].y0 = u->rewind_buf->buffer[i+2*frame_size].y0;
+                        // stage 1
+                        u->s1apdt[i].w2 = u->s1histbuf->buffer[i].w0;
+                        u->s1apdt[i].w1 = u->s1histbuf->buffer[i+frame_size].w0;
+                        u->s1apdt[i].w0 = u->s1histbuf->buffer[i+2*frame_size].w0;
+                        u->s1apdt[i].y2 = u->s1histbuf->buffer[i].y0;
+                        u->s1apdt[i].y1 = u->s1histbuf->buffer[i+frame_size].y0;
+                        u->s1apdt[i].y0 = u->s1histbuf->buffer[i+2*frame_size].y0;
+                        // stage 2
+                        u->s2apdt[i].w2 = u->s1histbuf->buffer[i].w0;
+                        u->s2apdt[i].w1 = u->s1histbuf->buffer[i+frame_size].w0;
+                        u->s2apdt[i].w0 = u->s1histbuf->buffer[i+2*frame_size].w0;
+                        u->s2apdt[i].y2 = u->s1histbuf->buffer[i].y0;
+                        u->s2apdt[i].y1 = u->s1histbuf->buffer[i+frame_size].y0;
+                        u->s2apdt[i].y0 = u->s1histbuf->buffer[i+2*frame_size].y0;
                         break;
                     }
                 }
             }
             // move the buffer forward 2 frames so we can write right
-            u->rewind_buf->idx += 4 * frame_size;
+            u->s1histbuf->idx += frame_size;
+            u->s2histbuf->idx += frame_size;
         }
     }
 
@@ -674,65 +691,122 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input,
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
 
-    if ((max_rewind / pa_frame_size(&(u->sample_spec))) < MIN_REWIND_FRAMES) {
-        if (max_rewind == u->sink->thread_info.max_rewind)
-            pa_log("JZ: %s[%d] sink_input_update_max_rewind_cb called "
-                   "without changing size.\n\tmax_rewind=%lu",
-                   __FILE__, __LINE__, max_rewind);
-        // This is an attempt to prevent excessive realloc shrinks and grows
+    if (max_rewind == u->sink->thread_info.max_rewind) {
+        fprintf(stderr,
+                "JZ: %s[%d] sink_input_update_max_rewind_cb called "
+                "without changing size.\n\tmax_rewind = %lu frames",
+                __FILE__, __LINE__, max_rewind/u->sz_smp);
+        pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
+        pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
         return;
     }
 
-    // grow u->rewind_buf to the new size
-    if (max_rewind > u->sink->thread_info.max_rewind) {
-        // convert to num samples recalling that we are storing 2 per iteration
-        growth = (2 * max_rewind /
-                  pa_sample_size_of_format(u->sample_spec.format)) -
-                 u->rewind_buf->length;
-        pa_log_error("JZ: %s[%d]\n\tmax_rewind=%lu, growth=%lu, idx=%lu, length=%lu",
-                     __FILE__, __LINE__, max_rewind, growth,
-                     u->rewind_buf->idx, u->rewind_buf->length);
-        u->rewind_buf = realloc(u->rewind_buf,
-                                2 * (sizeof(biquad_data_element) *
-                                (u->rewind_buf->length + growth)));
-        for (i=u->rewind_buf->length; i<(u->rewind_buf->length+growth); i++) {
-            u->rewind_buf->buffer[i].w0 = 0.0;
-            u->rewind_buf->buffer[i].y0 = 0.0;
-        }
-        u->rewind_buf->length += growth;
+    if ((max_rewind / u->sz_frm) < MIN_REWIND_FRAMES) {
+        // This is an attempt to prevent excessive realloc shrinks and grows
+        fprintf(stderr,
+                "JZ: %s[%d] sink_input_update_max_rewind_cb called "
+                "with too small size.\n\tmax_rewind = %lu frames",
+                __FILE__, __LINE__, max_rewind/u->sz_smp);
+        pa_memblockq_set_maxrewind(u->memblockq,
+                                   MIN_REWIND_FRAMES * u->sz_frm);
+        pa_sink_set_max_rewind_within_thread(u->sink,
+                                             MIN_REWIND_FRAMES * u->sz_frm);
+        return;
     }
+
+    // grow u->s1histbuf to the new size
+    if (max_rewind > u->sink->thread_info.max_rewind) {
+        // convert to num samples
+        growth = (max_rewind - u->sink->thread_info.max_rewind) / u->sz_smp;
+        pa_log_error("JZ: %s[%d]\n\t"
+                     "max_rewind=%lu\n\tgrowth=%lu\n\tidx=%lu\n\tlength=%lu",
+                     __FILE__, __LINE__, max_rewind, growth,
+                     u->s1histbuf->idx, u->s1histbuf->length);
+        // stage 1
+        u->s1histbuf = realloc(u->s1histbuf,
+                                (sizeof(biquad_data_element) *
+                                (u->s1histbuf->length + growth)));
+        for (i=u->s1histbuf->length; i<(u->s1histbuf->length+growth); i++) {
+            u->s1histbuf->buffer[i].w0 = 0.0;
+            u->s1histbuf->buffer[i].y0 = 0.0;
+        }
+        u->s1histbuf->length += growth;
+        // stage 2
+        u->s2histbuf = realloc(u->s2histbuf,
+                                (sizeof(biquad_data_element) *
+                                (u->s2histbuf->length + growth)));
+        for (i=u->s2histbuf->length; i<(u->s2histbuf->length+growth); i++) {
+            u->s2histbuf->buffer[i].w0 = 0.0;
+            u->s2histbuf->buffer[i].y0 = 0.0;
+        }
+        u->s2histbuf->length += growth;
+        pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
+        pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
+   }
 
     // shrink to new size
     if (max_rewind < u->sink->thread_info.max_rewind) {
         // convert to num samples
-        shrinkage = 2 * (u->sink->thread_info.max_rewind -
-                         (max_rewind /
-                          pa_sample_size_of_format(u->sample_spec.format)));
+        shrinkage = (u->sink->thread_info.max_rewind -
+                     max_rewind) / u->sz_smp;
         // loop through and move everybody back by shrinkage
-        pa_log_error("JZ: %s[%d]\n\tmax_rewind=%lu, shrinkage=%lu, idx=%lu, length=%lu",
-                     __FILE__, __LINE__, max_rewind, shrinkage,
-                     u->rewind_buf->idx, u->rewind_buf->length);
-        for (i=0; i<shrinkage; i++) {
-            pa_log_error("\ti=%lu",i);
-            u->rewind_buf->buffer[i + (u->rewind_buf->length - shrinkage)] =
-                    u->rewind_buf->buffer[i];
-        }
-        for (i=0; i<(u->rewind_buf->length - shrinkage); i++) {
-            u->rewind_buf->buffer[i] = u->rewind_buf->buffer[i+shrinkage];
-        }
-        u->rewind_buf->length -= shrinkage;
-        u->rewind_buf = realloc(u->rewind_buf,
-                                2 * (sizeof(biquad_data_element) *
-                                u->rewind_buf->length));
-        if (u->rewind_buf->idx > shrinkage)
-            u->rewind_buf->idx -= shrinkage;
-        else
-            u->rewind_buf->idx = u->rewind_buf->length -
-                                 (shrinkage - u->rewind_buf->idx);
-    }
+        fprintf(stderr,
+                "JZ: %s[%d] all in samples\n"
+                "\tcur max_rewind = % 12lu\n"
+                "\treq max_rewind = % 12lu\n"
+                "\tshrinkage =      % 12lu\n"
+                "\tidx =            % 12lu\n"
+                "\tlength =         % 12lu\n",
+                __FILE__, __LINE__, u->sink->thread_info.max_rewind / u->sz_smp,
+                max_rewind / u->sz_smp, shrinkage,
+                u->s1histbuf->idx, u->s1histbuf->length);
 
-    pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
-    pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
+        // stage 1
+        fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
+        for (i=0; i<shrinkage; i++) {
+            u->s1histbuf->buffer[i + (u->s1histbuf->length - shrinkage)] =
+                    u->s1histbuf->buffer[i];
+        }
+        fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
+        for (i=0; i<(u->s1histbuf->length - shrinkage); i++) {
+            u->s1histbuf->buffer[i] = u->s1histbuf->buffer[i+shrinkage];
+        }
+        fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
+        u->s1histbuf->length -= shrinkage;
+        fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
+        u->s1histbuf = realloc(u->s1histbuf,
+                                (sizeof(biquad_data_element) *
+                                u->s1histbuf->length));
+        fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
+        if (u->s1histbuf->idx > shrinkage) {
+            u->s1histbuf->idx -= shrinkage;
+            fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
+        } else {
+            u->s1histbuf->idx = u->s1histbuf->length -
+                                 (shrinkage - u->s1histbuf->idx);
+            fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
+        }
+
+        // stage 2
+        for (i=0; i<shrinkage; i++) {
+            u->s2histbuf->buffer[i + (u->s2histbuf->length - shrinkage)] =
+                    u->s2histbuf->buffer[i];
+        }
+        for (i=0; i<(u->s2histbuf->length - shrinkage); i++) {
+            u->s2histbuf->buffer[i] = u->s2histbuf->buffer[i+shrinkage];
+        }
+        u->s2histbuf->length -= shrinkage;
+        u->s2histbuf = realloc(u->s2histbuf,
+                                (sizeof(biquad_data_element) *
+                                u->s2histbuf->length));
+        if (u->s2histbuf->idx > shrinkage)
+            u->s2histbuf->idx -= shrinkage;
+        else
+            u->s2histbuf->idx = u->s2histbuf->length -
+                                 (shrinkage - u->s2histbuf->idx);
+        pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
+        pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
+    }
 }
 
 /**
@@ -779,9 +853,11 @@ static void sink_input_update_sink_fixed_latency_cb(pa_sink_input *i) {
                                             i->sink->thread_info.fixed_latency);
 }
 
+/* Called from I/O thread context */
 /**
- * \brief Callback used from IO thread context to detach an input from this sink.
- * \param sink_input
+ * \brief   Callback used from IO thread context to detach an input from this
+ *          sink.
+ * \param   sink_input
  */
 //TODO: document me better
 static void sink_input_detach_cb(pa_sink_input *sink_input) {
@@ -840,19 +916,18 @@ static void sink_input_kill_cb(pa_sink_input *sink_input) {
     pa_module_unload_request(u->module, TRUE );
 }
 
-/**
- * \brief   Callback called from IO thread. Does rewind if input is just added
- *          so that we are heard immediately.
- */
-static void sink_input_state_change_cb(pa_sink_input *sink_input,
+/* Called from IO thread context */
+static void sink_input_state_change_cb(pa_sink_input *i,
                                        pa_sink_input_state_t state) {
     struct userdata *u;
-    pa_sink_input_assert_ref(sink_input);
-    pa_assert_se(u = sink_input->userdata);
-
-    if (PA_SINK_INPUT_IS_LINKED(state) &&
-        (sink_input->thread_info.state == PA_SINK_INPUT_INIT)) {
-        pa_sink_input_request_rewind(sink_input, 0, FALSE, TRUE, TRUE );
+    pa_sink_input_assert_ref(i);
+    pa_assert_se(u = i->userdata);
+    /* If we are added for the first time, ask for a rewinding so that we are
+     * heard right-away. */
+    if (PA_SINK_INPUT_IS_LINKED(state) && i->thread_info.state
+            == PA_SINK_INPUT_INIT) {
+        pa_log_debug("Requesting rewind due to state change.");
+        pa_sink_input_request_rewind(i, 0, FALSE, TRUE, TRUE );
     }
 }
 
@@ -1134,28 +1209,40 @@ int pa__init(pa_module *module) {
     pa_memblock_unref(silence.memblock);
 
     /* (9) INITIALIZE ANYTHING ELSE YOU NEED HERE */
-    // setup filter factors and filter history buffer
-    u->lpfs = malloc(sizeof(biquad_factors));
-    u->hpfs = malloc(sizeof(biquad_factors));
-    u->apfs = malloc(sizeof(biquad_factors));
-    u->lpdt0 = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->lpdt1 = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->hpdt0 = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->hpdt1 = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->apdt0 = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->apdt1 = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->rewind_buf = malloc(4 * sizeof(size_t));
-    if ((u->sink->thread_info.max_rewind /
-        (pa_sample_size_of_format(u->sample_spec.format) /
-         u->sample_spec.channels)) < MIN_REWIND_FRAMES) {
-        u->rewind_buf->length = MIN_REWIND_FRAMES * u->sample_spec.channels * 2;
+    // setup shortcuts to common type sizes
+    u->sz_bqf = sizeof(biquad_factors);
+    u->sz_smp = pa_sample_size(&(u->sample_spec));
+    u->sz_frm = u->sz_smp * u->sample_spec.channels;
+
+    // alloc filter factors
+    u->lpfs = malloc(u->sz_bqf);
+    u->hpfs = malloc(u->sz_bqf);
+    u->apfs = malloc(u->sz_bqf);
+
+    // alloc stage 1&2 history data
+    u->s1lpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->s1hpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->s1apdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->s1histbuf = malloc(4 * sizeof(size_t));
+    u->s2lpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->s2hpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->s2apdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    u->s2histbuf = malloc(4 * sizeof(size_t));
+    if ((u->sink->thread_info.max_rewind / u->sz_frm) < MIN_REWIND_FRAMES) {
+        u->s1histbuf->length = MIN_REWIND_FRAMES * u->sample_spec.channels;
+        u->s2histbuf->length = MIN_REWIND_FRAMES * u->sample_spec.channels;
+        u->sink->thread_info.max_rewind = MIN_REWIND_FRAMES * u->sz_frm;
     } else {
-        u->rewind_buf->length = 2 * u->sink->thread_info.max_rewind /
-                                pa_sample_size_of_format(u->sample_spec.format);
+        u->s1histbuf->length = u->sink->thread_info.max_rewind / u->sz_smp;
+        u->s2histbuf->length = u->sink->thread_info.max_rewind / u->sz_smp;
     }
-    u->rewind_buf->idx = 0;
-    u->rewind_buf->start = 0;
-    u->rewind_buf->buffer = calloc(u->rewind_buf->length,
+    u->s1histbuf->idx = 0;
+    u->s1histbuf->start = 0;
+    u->s1histbuf->buffer = calloc(u->s1histbuf->length,
+                                   sizeof(biquad_data_element));
+    u->s2histbuf->idx = 0;
+    u->s2histbuf->start = 0;
+    u->s2histbuf->buffer = calloc(u->s2histbuf->length,
                                    sizeof(biquad_data_element));
     // init filter data
     filter_calc_factors(u->sink);
@@ -1164,7 +1251,7 @@ int pa__init(pa_module *module) {
     pa_sink_put(u->sink);
     pa_sink_input_put(u->sink_input);
     pa_modargs_free(ma);
-    pa_log_debug("JZ: %s[%d] finished lfe-lp.pa__init().", __FILE__, __LINE__);
+    pa_log_debug("JZ: %s[%d] finished lfe-lp.pa__init().\n", __FILE__, __LINE__);
     return(0);
 
     fail: if (ma)
@@ -1173,11 +1260,6 @@ int pa__init(pa_module *module) {
     return(-1);
 }
 
-/**
- * \brief   Return the number of objects linked with this sink.
- * \param   module  pointer to this module
- * \return  number of objects linked with this sink
- */
 int pa__get_n_used(pa_module *m) {
     struct userdata *u;
     pa_assert(m);
@@ -1185,12 +1267,8 @@ int pa__get_n_used(pa_module *m) {
     return(pa_sink_linked_by(u->sink));
 }
 
-/**
- * \fn pa__done
- * \brief   We're done, let's cleanup.
- * \param m
- * \note    See comments in sink_input_kill_cb() above about destruction order!
- */
+/**\brief   We're done, let's cleanup.
+ * \note    See comments in sink_input_kill_cb() above about destruction order! */
 void pa__done(pa_module*m) {
     struct userdata *u;
     pa_assert(m);
@@ -1204,22 +1282,26 @@ void pa__done(pa_module*m) {
         free(u->hpfs);
     if (u->apfs)
         free(u->apfs);
-    if (u->lpdt0)
-        free(u->lpdt0);
-    if (u->hpdt0)
-        free(u->hpdt0);
-    if (u->apdt0)
-        free(u->apdt0);
-    if (u->lpdt1)
-        free(u->lpdt1);
-    if (u->hpdt1)
-        free(u->hpdt1);
-    if (u->apdt1)
-        free(u->apdt1);
-    if ((*(u->rewind_buf)).buffer)
-        free((*(u->rewind_buf)).buffer);
-    if (u->rewind_buf)
-        free(u->rewind_buf);
+    if (u->s1lpdt)
+        free(u->s1lpdt);
+    if (u->s1hpdt)
+        free(u->s1hpdt);
+    if (u->s1apdt)
+        free(u->s1apdt);
+    if ((*(u->s1histbuf)).buffer)
+        free((*(u->s1histbuf)).buffer);
+    if (u->s1histbuf)
+        free(u->s1histbuf);
+    if (u->s2lpdt)
+        free(u->s2lpdt);
+    if (u->s2hpdt)
+        free(u->s2hpdt);
+    if (u->s2apdt)
+        free(u->s2apdt);
+    if ((*(u->s2histbuf)).buffer)
+        free((*(u->s2histbuf)).buffer);
+    if (u->s2histbuf)
+        free(u->s2histbuf);
 
     if (u->sink_input)
         pa_sink_input_unlink(u->sink_input);
