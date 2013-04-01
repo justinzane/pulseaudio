@@ -124,7 +124,7 @@ load-module module-native-protocol-unix
 ##### Testing module-lfe-lp #####
 #load-module module-device-manager do_routing=1
 load-module module-null-sink sink_name=null channels=6 channel_map=front-left,front-right,rear-left,rear-right,front-center,lfe format=s16le rate=44100
-load-module module-lfe-lp master=null lpfreq=200.0
+load-module module-lfe-lp master=null lpfreq=249.0
 set-default-sink null.lfe_lp
 set-default-source null.monitor
 #load-module module-lfe-lp master=alsa_output.pci-0000_00_1b.0.analog-stereo lpfreq=200.0
