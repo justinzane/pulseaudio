@@ -49,7 +49,15 @@ typedef struct pa_sink_volume_change pa_sink_volume_change;
 #include <pulsecore/sink-input.h>
 
 #define PA_MAX_INPUTS_PER_SINK 32
-
+/** \brief lower limit for sink/sink_input->thread_info.max_rewind
+ *         ~0 1/8 sec at 8kHz sample rate. */
+#define MIN_MAX_REWIND_FRAMES 1024
+/** \brief typical limit for sink/sink_input->thread_info.max_rewind
+ *         ~0 1/3 sec at 44100kHz sample rate. */
+#define NORM_MAX_REWIND_FRAMES 16384
+/** \brief upper limit for sink/sink_input->thread_info.max_rewind
+ *         ~2 3/4 sec at 96kHz sample rate. */
+#define MAX_MAX_REWIND_FRAMES 262144
 /* Returns true if sink is linked: registered and accessible from client side. */
 static inline pa_bool_t PA_SINK_IS_LINKED(pa_sink_state_t x) {
     return x == PA_SINK_RUNNING || x == PA_SINK_IDLE || x == PA_SINK_SUSPENDED;
