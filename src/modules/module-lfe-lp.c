@@ -213,7 +213,8 @@ static void filter_calc_factors(pa_sink *sink) {
     pa_assert_se(u = sink->userdata);
 
     w0 = 2.0 * PI * u->lpfreq / (double)u->sample_spec.rate;
-    Q = sqrt(2.0)/2.0;
+//    Q = sqrt(2.0)/2.0;
+    Q = 0.5;
     alpha = sin(w0) / (2.0 * Q);
 
     u->lpfs->a0 = (1.0 + alpha);
