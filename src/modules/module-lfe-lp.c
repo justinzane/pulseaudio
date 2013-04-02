@@ -213,8 +213,7 @@ static void filter_calc_factors(pa_sink *sink) {
     pa_assert_se(u = sink->userdata);
 
     w0 = 2.0 * PI * u->lpfreq / (double)u->sample_spec.rate;
-//    Q = sqrt(2.0)/2.0;
-    Q = 0.5;
+    Q = sqrt(2.0)/2.0;
     alpha = sin(w0) / (2.0 * Q);
 
     u->lpfs->a0 = (1.0 + alpha);
@@ -483,7 +482,7 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
     pa_assert(chunk);
     pa_assert_se(u = sink_input->userdata);
 
-    /* Hmm, process any rewind request that might be queued up
+    /* Removed: https://bugs.freedesktop.org/show_bug.cgi?id=53915
     pa_sink_process_rewind(u->sink, 0); */
 
     while (pa_memblockq_peek(u->memblockq, &tchunk) < 0) {
@@ -876,24 +875,41 @@ static void sink_input_detach_cb(pa_sink_input *sink_input) {
     pa_sink_set_rtpoll(u->sink, NULL );
 }
 
-/* Called from I/O thread context */
-static void sink_input_attach_cb(pa_sink_input *i) {
+/**\brief   Callback used from IO thread to attach an input to this sink.
+ *          Importantly, this is where the rewind buffer gets allocated, not in
+ *          pa__init. */
+static void sink_input_attach_cb(pa_sink_input *input) {
     struct userdata *u;
-    pa_sink_input_assert_ref(i);
-    pa_assert_se(u = i->userdata);
+    pa_sink_input_assert_ref(input);
+    pa_assert_se(u = input->userdata);
 
-    pa_sink_set_rtpoll(u->sink, i->sink->thread_info.rtpoll);
+    pa_sink_set_rtpoll(u->sink, input->sink->thread_info.rtpoll);
     pa_sink_set_latency_range_within_thread(u->sink,
-                                            i->sink->thread_info.min_latency,
-                                            i->sink->thread_info.max_latency);
+                                            input->sink->thread_info.min_latency,
+                                            input->sink->thread_info.max_latency);
     pa_sink_set_fixed_latency_within_thread(u->sink,
-                                            i->sink->thread_info.fixed_latency);
+                                            input->sink->thread_info.fixed_latency);
     pa_sink_set_max_request_within_thread(u->sink,
-                                          pa_sink_input_get_max_request(i));
+                                          pa_sink_input_get_max_request(input));
+
+    /* Alloc the rewind buffer */
+    if ((u->sink->thread_info.max_rewind / u->sz_frm) < MIN_MAX_REWIND_FRAMES) {
+        u->s1histbuf->length = MIN_MAX_REWIND_FRAMES * u->sample_spec.channels;
+        u->s2histbuf->length = MIN_MAX_REWIND_FRAMES * u->sample_spec.channels;
+        u->sink->thread_info.max_rewind = MIN_MAX_REWIND_FRAMES * u->sz_frm;
+    } else {
+        u->s1histbuf->length = u->sink->thread_info.max_rewind / u->sz_smp;
+        u->s2histbuf->length = u->sink->thread_info.max_rewind / u->sz_smp;
+    }
+    u->s1histbuf->buffer = calloc(u->s1histbuf->length,
+                                   sizeof(biquad_data_element));
+    u->s2histbuf->buffer = calloc(u->s2histbuf->length,
+                                   sizeof(biquad_data_element));
+
     /* FIXME: Too small max_rewind:
      * https://bugs.freedesktop.org/show_bug.cgi?id=53709 */
     pa_sink_set_max_rewind_within_thread(u->sink,
-                                         pa_sink_input_get_max_rewind(i));
+                                         pa_sink_input_get_max_rewind(input));
 
     pa_sink_attach_within_thread(u->sink);
 }
@@ -1227,31 +1243,35 @@ int pa__init(pa_module *module) {
     u->hpfs = malloc(u->sz_bqf);
     u->apfs = malloc(u->sz_bqf);
 
-    // alloc stage 1&2 history data
+    // alloc stage 1&2 biquad data
     u->s1lpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
     u->s1hpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
     u->s1apdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->s1histbuf = malloc(4 * sizeof(size_t));
     u->s2lpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
     u->s2hpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
     u->s2apdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
+    /* If the sink is unlinked, max_rewind doesn't have any meaning anyway. You
+     * get notifications about connection state changes via the attach() and
+     * detach() callbacks. You can check in attach() what the current max_rewind
+     * is and allocate the rewind buffer accordingly.
+     * Before the initial attach() call, and between detach() and attach() calls
+     * when the sink input is moved, you shouldn't have any need to access the
+     * rewind buffer.
+     * In addition to updating the rewind buffer in update_max_rewind(), you
+     * need to initialize/update it also in attach(), but I didn't think about
+     * this before now. <tanuk> */
+    // alloc rewind buffer structs but NOT the buffers.
+    u->s1histbuf = malloc(4 * sizeof(size_t));
     u->s2histbuf = malloc(4 * sizeof(size_t));
-    if ((u->sink->thread_info.max_rewind / u->sz_frm) < MIN_MAX_REWIND_FRAMES) {
-        u->s1histbuf->length = MIN_MAX_REWIND_FRAMES * u->sample_spec.channels;
-        u->s2histbuf->length = MIN_MAX_REWIND_FRAMES * u->sample_spec.channels;
-        u->sink->thread_info.max_rewind = MIN_MAX_REWIND_FRAMES * u->sz_frm;
-    } else {
-        u->s1histbuf->length = u->sink->thread_info.max_rewind / u->sz_smp;
-        u->s2histbuf->length = u->sink->thread_info.max_rewind / u->sz_smp;
-    }
     u->s1histbuf->idx = 0;
     u->s1histbuf->start = 0;
-    u->s1histbuf->buffer = calloc(u->s1histbuf->length,
-                                   sizeof(biquad_data_element));
+    u->s1histbuf->length = 0;
+    u->s1histbuf->buffer = NULL;
     u->s2histbuf->idx = 0;
     u->s2histbuf->start = 0;
-    u->s2histbuf->buffer = calloc(u->s2histbuf->length,
-                                   sizeof(biquad_data_element));
+    u->s2histbuf->length = 0;
+    u->s2histbuf->buffer = NULL;
+
     // init filter data
     filter_calc_factors(u->sink);
     filter_init_bqdt(u->sink);
