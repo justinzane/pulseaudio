@@ -19,119 +19,32 @@
  USA.
  ***/
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
-
-#include <stdio.h>
-#include <math.h>
-#include <time.h>
-#include <float.h>
-#include <xmmintrin.h>
-
-#include <pulse/gccmacro.h>
-#include <pulse/xmalloc.h>
-#include <pulse/def.h>
-
-#include <pulsecore/i18n.h>
-#include <pulsecore/namereg.h>
-#include <pulsecore/sink.h>
-#include <pulsecore/module.h>
-#include <pulsecore/core-util.h>
-#include <pulsecore/modargs.h>
-#include <pulsecore/log.h>
-#include <pulsecore/rtpoll.h>
-#include <pulsecore/sample-util.h>
-#include <pulsecore/ltdl-helper.h>
-
+#include <biquad/biquad-filter.h>
 #include "module-lfe-lp-symdef.h"
 
-// TODO: Why am I defined here? Shouldn't I come from pulse/pulsecore?
-#define MEMBLOCKQ_MAXLENGTH (16*1024*1024)
-#ifndef PI
-    #ifndef M_PI
-        #define PI 3.1415926535897932384626433
-    #else
-        #define PI M_PI
-    #endif
-#endif
-#define MIN_CUTOFF_FREQ 20.0
-#define MAX_CUTOFF_FREQ 500.0
-
-/**
- * \struct biquad_factors
- * \brief  holds biquad filter coefficients/factors for a specific filter type
- * \url    http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
- */
-typedef struct biquad_factors {
-    double a0;
-    double a1;
-    double a2;
-    double b0;
-    double b1;
-    double b2;
-} biquad_factors;
-
-/**
- * \struct biquad_data
- * \brief  holds one iteration of biquad filter history data
- * \url    http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
- */
-typedef struct biquad_data{
-    double y0;
-    double y1;
-    double y2;
-    double w0;
-    double w1;
-    double w2;
-} biquad_data;
-
-/**
- * \struct biquad_data_element
- * \brief  holds one sample of biquad filter history data -- 1/3 of total.
- *         used for the rewind buffer
- */
-typedef struct biquad_data_element {
-    double y0;
-    double w0;
-} biquad_data_element;
-
-/**
- * \struct biquad_history
- * \brief  holds the rewind history of filter data
- * \var idx     the current position in the buffer
- * \var start   the initial position in the buffer
- * \var length  the length, in samples, sizeof(biquad_data), of the buffer
- * \var buffer  the buffer
- */
-typedef struct biquad_history {
-    size_t idx;
-    size_t start;
-    size_t length;
-    biquad_data_element *buffer;
-} biquad_history;
-
-
-PA_MODULE_AUTHOR( _("Justin Chudgar"));
-PA_MODULE_DESCRIPTION( _("LFE LP Filter"));
-#ifndef PACKAGE_VERSION
+PA_MODULE_AUTHOR(_("Justin Chudgar"));
+PA_MODULE_DESCRIPTION(_("LFE LP Filter"));
+#ifndef PACKAGE_VERSION     /* Stop Eclipse from complaining */
 #define PACKAGE_VERSION ( _("0.0.0-bogus"))
 #endif
 PA_MODULE_VERSION(PACKAGE_VERSION);
 PA_MODULE_LOAD_ONCE(FALSE);
-PA_MODULE_USAGE( _("sink_name=<name for the sink> "
-        "sink_properties=<properties for the sink> "
-        "master=<name of sink to filter> "
-        "lpfreq=low pass cutoff freq 50-500 Hz"
-        "use_volume_sharing=<yes or no> "
-        "force_flat_volume=<yes or no> " ));
+PA_MODULE_USAGE(_("sink_name=<name for the sink> "
+                  "sink_properties=<properties for the sink> "
+                  "master=<name of sink to filter> "
+                  "lpfreq=low pass cutoff freq 20-500 Hz"
+                  "use_volume_sharing=<yes or no> "
+                  "force_flat_volume=<yes or no> " ));
 
-static const char* const valid_modargs[] = { "sink_name", "sink_properties",
-                                             "master", "lpfreq",
-                                             "use_volume_sharing",
-                                             "force_flat_volume", NULL };
+static const char* const valid_modargs[] = {"sink_name",
+                                            "sink_properties",
+                                            "master",
+                                            "lpfreq",
+                                            "use_volume_sharing",
+                                            "force_flat_volume",
+                                            NULL };
 
-/** \var persistent user data structure */
+/* persistent user data structure */
 struct userdata {
     pa_module *module;
     pa_bool_t autoloaded;
@@ -141,190 +54,17 @@ struct userdata {
     pa_bool_t auto_desc;
     pa_sample_spec sample_spec;
     size_t sz_smp, sz_frm, sz_bqf;
-    /** \var corner/cutoff frequency, user defined */
-    double lpfreq;
-    /** \var lowpass, highpass and allpass coefficients, respectively */
-    struct biquad_factors *lpfs, *hpfs, *apfs;
-    /** \var history data for the various filters stage 1*/
-    struct biquad_data *s1lpdt, *s1hpdt, *s1apdt;
-    /** \var rewind buffer for biquad_data stage 1*/
-    struct biquad_history *s1histbuf;
-    /** \var history data for the various filters stage 1*/
-    struct biquad_data *s2lpdt, *s2hpdt, *s2apdt;
-    /** \var rewind buffer for biquad_data stage 2*/
-    struct biquad_history *s2histbuf;
-    /** \var map of channels index to 'l','h' or 'a' to indicate filter type */
-    char filter_map[PA_CHANNELS_MAX];
+    double lpfreq;                                 /* corner/cutoff frequency, user defined */
+    struct biquad_factors *lpfs, *hpfs, *apfs;     /* lowpass, highpass and allpass coefficients */
+    struct biquad_data *s1lpdt, *s1hpdt, *s1apdt;  /* history data for the various filters stage 1*/
+    struct biquad_history *s1histbuf;              /* rewind buffer for biquad_data stage 1*/
+    struct biquad_data *s2lpdt, *s2hpdt, *s2apdt;  /* history data for the various filters stage 1*/
+    struct biquad_history *s2histbuf;              /* rewind buffer for biquad_data stage 2*/
+    char filter_map[PA_CHANNELS_MAX];              /* map of channels index to 'l','h' or 'a'
+                                                      to indicate filter type */
 };
 
-
-/**
- * \brief do the filtering
- * \param [in]  bqdt    the biquad history data
- * \param [in]  bqfs    the filter factors
- * \param [in]  src     the input sample
- * \return              the filtered sample
- */
-static float filter_biquad (struct biquad_data *bqdt, struct biquad_factors bqfs,
-                   float *src) {
-    //#y0= (b0 * x0 + b1 * x1 + b2 * x2) − (a1 * y1 + a2 * y2);
-    (*bqdt).w0 = (double)*src;
-    (*bqdt).y0 = (*bqdt).w0 * bqfs.b0 +  (*bqdt).w1 * bqfs.b1 + (*bqdt).w2 * bqfs.b2
-                                - ((*bqdt).y1 * bqfs.a1 + (*bqdt).y2 * bqfs.a2);
-    (*bqdt).w2 = (*bqdt).w1;
-    (*bqdt).w1 = (*bqdt).w0;
-    (*bqdt).y2 = (*bqdt).y1;
-    (*bqdt).y1 = (*bqdt).y0;
-
-    return((float)(*bqdt).y0);
-}
-
-/**
- * \brief   function to calculate filter factors
- * \url     http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
- * \details
- * LPF:        H(s) = 1 / (s^2 + s/Q + 1)
- *               a0 =   1 + alpha
- *               a1 =  -2*cos(w0)
- *               a2 =   1 - alpha
- *               b0 =  (1 - cos(w0))/2
- *               b1 =  (1 - cos(w0))
- *               b2 =  (1 - cos(w0))/2
- * HPF:        H(s) = s^2 / (s^2 + s/Q + 1)
- *               a0 =   1 + alpha
- *               a1 =  -2*cos(w0)
- *               a2 =   1 - alpha
- *               b0 =  (1 + cos(w0))/2
- *               b1 = -(1 + cos(w0))
- *               b2 =  (1 + cos(w0))/2
- * APF:        H(s) = (s^2 - s/Q + 1) / (s^2 + s/Q + 1)
- *               a0 =   1 + alpha
- *               a1 =  -2*cos(w0)
- *               a2 =   1 - alpha
- *               b0 =   1 - alpha
- *               b1 =  -2*cos(w0)
- *               b2 =   1 + alpha
- * All coefficients are normalized by dividing by the respective a0.
- */
-static void filter_calc_factors(pa_sink *sink) {
-    struct userdata *u;
-    double w0,Q,alpha;
-    pa_sink_assert_ref(sink);
-    pa_assert_se(u = sink->userdata);
-
-    w0 = 2.0 * PI * u->lpfreq / (double)u->sample_spec.rate;
-    Q = sqrt(2.0)/2.0;
-    alpha = sin(w0) / (2.0 * Q);
-
-    u->lpfs->a0 = (1.0 + alpha);
-    u->lpfs->a1 = (-2.0 * cos(w0))        / u->lpfs->a0;
-    u->lpfs->a2 = (1.0 - alpha)           / u->lpfs->a0;
-    u->lpfs->b0 = ((1.0 - cos(w0)) / 2.0) / u->lpfs->a0;
-    u->lpfs->b1 = ((1.0 - cos(w0))      ) / u->lpfs->a0;
-    u->lpfs->b2 = ((1.0 - cos(w0)) / 2.0) / u->lpfs->a0;
-    u->lpfs->a0 = 1.0;
-
-    u->hpfs->a0 = (1.0 + alpha);
-    u->hpfs->a1 = (-2.0 * cos(w0))           / u->hpfs->a0;
-    u->hpfs->a2 = (1.0 - alpha)              / u->hpfs->a0;
-    u->hpfs->b0 = (     (1.0 + cos(w0))/2.0) / u->hpfs->a0;
-    u->hpfs->b1 = (-1.0*(1.0 + cos(w0))    ) / u->hpfs->a0;
-    u->hpfs->b2 = (     (1.0 + cos(w0))/2.0) / u->hpfs->a0;
-    u->hpfs->a0 = 1.0;
-
-    u->apfs->a0 = (1.0 + alpha);
-    u->apfs->a1 = (-2.0 * cos(w0))  / u->apfs->a0;
-    u->apfs->a2 = (1.0 - alpha)     / u->apfs->a0;
-    u->apfs->b0 = (1.0 - alpha)     / u->apfs->a0;
-    u->apfs->b1 = (-2.0 * cos(w0))  / u->apfs->a0;
-    u->apfs->b2 = (1.0 + alpha)     / u->apfs->a0;
-    u->apfs->a0 = 1.0;
-
-    pa_log_info ("JZ: %s[%d]\n", __FILE__, __LINE__);
-    pa_log_info ("\tw0=%0.8f, Q=%0.8f, alpha=%0.8f", w0, Q, alpha);
-    pa_log_info ("\tlowpass_factors\n"
-             "\t[b0, b1, b2]=[%0.8f, %0.8f, %0.8f]\n"
-             "\t[a0, a1, a2]=[%0.8f, %0.8f, %0.8f]\n",
-             u->lpfs->b0, u->lpfs->b1, u->lpfs->b2,
-             u->lpfs->a0, u->lpfs->a1, u->lpfs->a2
-            );
-    pa_log_info ("\thighpass_factors\n"
-             "\t[b0, b1, b2]=[%0.8f, %0.8f, %0.8f]\n"
-             "\t[a0, a1, a2]=[%0.8f, %0.8f, %0.8f]\n",
-             u->hpfs->b0, u->hpfs->b1, u->hpfs->b2,
-             u->hpfs->a0, u->hpfs->a1, u->hpfs->a2
-            );
-    pa_log_info ("\tallpass_factors\n"
-             "\t[b0, b1, b2]=[%0.8f, %0.8f, %0.8f]\n"
-             "\t[a0, a1, a2]=[%0.8f, %0.8f, %0.8f]\n",
-             u->apfs->b0, u->apfs->b1, u->apfs->b2,
-             u->apfs->a0, u->apfs->a1, u->apfs->a2
-            );
-    return;
-}
-
-/** \brief initialize filter history data to 0.0 */
-static void filter_init_bqdt (pa_sink *sink) {
-    struct userdata *u;
-    size_t i;
-    struct biquad_data bqdt;
-    pa_sink_assert_ref(sink);
-    pa_assert_se(u = sink->userdata);
-
-    for (i=0; i<u->sample_spec.channels; i++) {
-        bqdt.w0 = 0.0; bqdt.w1 = 0.0; bqdt.w2 = 0.0;
-        bqdt.y0 = 0.0; bqdt.y1 = 0.0; bqdt.y2 = 0.0;
-        u->s1lpdt[i] = bqdt; u->s1hpdt[i] = bqdt; u->s1apdt[i] = bqdt;
-        u->s2lpdt[i] = bqdt; u->s2hpdt[i] = bqdt; u->s2apdt[i] = bqdt;
-    }
-}
-
-/**\brief store a biquad_data_element struct in the history buffer so that we
- *        can rewind without audio inconsistencies. "stage" parameter must be
- *        either 1 or 2. */
-static void filter_store_history (pa_sink *sink,
-                                  biquad_data_element *bqdtel,
-                                  unsigned int stage) {
-    struct userdata *u;
-    pa_sink_assert_ref(sink);
-    pa_assert_se(u = sink->userdata);
-
-    switch (stage) {
-        case 1: {
-            u->s1histbuf->buffer[u->s1histbuf->idx] = *bqdtel;
-            u->s1histbuf->idx += 1;
-            if (u->s1histbuf->idx >= u->s1histbuf->length)
-                u->s1histbuf->idx = 0;
-            break;
-        }
-        case 2: {
-            u->s2histbuf->buffer[u->s2histbuf->idx] = *bqdtel;
-            u->s2histbuf->idx += 1;
-            if (u->s2histbuf->idx >= u->s2histbuf->length)
-                u->s2histbuf->idx = 0;
-            break;
-        }
-        default:
-            pa_log_error("Calls to filter_store_history must have stage = 1 or 2.");
-    }
-}
-
-/**
- * \fn sink_process_msg_cb
- * \brief callback function used from the IO thread context
- * @param [in]  msgobject   ???
- * @param [in]  code        ???
- * @param [in]  data        ???
- * @param [in]  offset      ???
- * @param [in]  chunk       ???
- * @return  ???
- * \note Currently only handles PA_SINK_MESSAGE_GET_LATENCY.
- */
-static int sink_process_msg_cb(pa_msgobject *msgobject,
-                               int code,
-                               void *data,
-                               int64_t offset,
-                               pa_memchunk *chunk) {
+static int sink_process_msg_cb(pa_msgobject *msgobject, int code, void *data, int64_t offset, pa_memchunk *chunk) {
     struct userdata *u = PA_SINK(msgobject)->userdata;
 
     switch (code) {
@@ -332,140 +72,89 @@ static int sink_process_msg_cb(pa_msgobject *msgobject,
             /* The sink is _put() before the sink input is, so let's make sure
              * we don't access it in that time. Also, the sink input is first
              * shut down, the sink second. */
-            if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) ||
-                !PA_SINK_INPUT_IS_LINKED(u->sink_input->thread_info.state)) {
-                *((pa_usec_t*) data) = 0;
-                return(0);
+            if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) || !PA_SINK_INPUT_IS_LINKED(u->sink_input->thread_info.state)) {
+                * ((pa_usec_t*)data) = 0;
+                return (0);
             }
             /* Get the latency of the master sink and add the latency internal
              to our sink input on top */
-            *((pa_usec_t*) data) =
-                    pa_sink_get_latency_within_thread(u->sink_input->sink) +
-                    pa_bytes_to_usec(
-                            pa_memblockq_get_length(
-                                    u->sink_input->thread_info.render_memblockq),
-                            &u->sink_input->sink->sample_spec);
-            return(0);
+            * ((pa_usec_t*)data) = pa_sink_get_latency_within_thread(u->sink_input->sink)
+                    + pa_bytes_to_usec(pa_memblockq_get_length(u->sink_input->thread_info.render_memblockq),
+                                       &u->sink_input->sink->sample_spec);
+            return (0);
     }
-    return(pa_sink_process_msg(msgobject, code, data, offset, chunk));
+    return (pa_sink_process_msg(msgobject, code, data, offset, chunk));
 }
 
-/**
- * \brief callback used from main thread context to set this sink's state
- * @param sink
- * @param state
- * @return always returns 0
- */
-//TODO: document me better
 static int sink_set_state_cb(pa_sink *sink, pa_sink_state_t state) {
     struct userdata *u;
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
 
-    if (!PA_SINK_IS_LINKED(state) ||
-        !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
-        return(0);
+    if (!PA_SINK_IS_LINKED(state) || !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
+        return (0);
 
     pa_sink_input_cork(u->sink_input, state == PA_SINK_SUSPENDED);
-    return(0);
+    return (0);
 }
 
-/**
- * \brief   callback used from IO thread context to request a rewind
- * \param sink
- */
-//TODO: document me better
 static void sink_request_rewind_cb(pa_sink *sink) {
     struct userdata *u;
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
 
-    if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) ||
-        !PA_SINK_INPUT_IS_LINKED(u->sink_input->thread_info.state)) {
-        pa_log_debug("JZ: %s[%d] sink or sink-input not linked, cannot rewind",
-                     __FILE__, __LINE__);
+    if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) || !PA_SINK_INPUT_IS_LINKED(u->sink_input->thread_info.state)) {
+        pa_log_debug("JZ: %s[%d] sink or sink-input not linked, cannot rewind", __FILE__, __LINE__);
         return;
     }
 
     /* Just hand this one over to the master sink */
-    pa_sink_input_request_rewind(u->sink_input,
-                                 (sink->thread_info.rewind_nbytes +
-                                  pa_memblockq_get_length(u->memblockq)),
-                                 TRUE,
-                                 FALSE,
-                                 FALSE );
+    pa_sink_input_request_rewind(u->sink_input, (sink->thread_info.rewind_nbytes + pa_memblockq_get_length(u->memblockq)), TRUE,
+                                 FALSE, FALSE );
 }
 
-/**
- * \brief   called from the IO thread context. ???
- * \param sink  this sink
- */
-//TODO: document me better
 static void sink_update_requested_latency_cb(pa_sink *sink) {
     struct userdata *u;
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
 
-    if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) ||
-        !PA_SINK_INPUT_IS_LINKED(u->sink_input->thread_info.state))
+    if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) || !PA_SINK_INPUT_IS_LINKED(u->sink_input->thread_info.state))
         return;
 
     /* Just hand this one over to the master sink */
-    pa_sink_input_set_requested_latency_within_thread(
-            u->sink_input,
-            pa_sink_get_requested_latency_within_thread(sink));
+    pa_sink_input_set_requested_latency_within_thread(u->sink_input, pa_sink_get_requested_latency_within_thread(sink));
 }
 
-/**
- * \brief   callback used from the main thread context to set the sink's volume
- * \param   sink  this sink
- * \note    This seems like a silly thing. A filter should not influence the
- *          general volume of the stream.
- */
-//TODO: Remove me safely.
+/* This seems like a silly thing. A filter should not influence the general volume of the stream.
+ * TODO: Remove me safely. */
 static void sink_set_volume_cb(pa_sink *sink) {
     struct userdata *u;
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
 
-    if (!PA_SINK_IS_LINKED(pa_sink_get_state(sink)) ||
-        !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
+    if (!PA_SINK_IS_LINKED(pa_sink_get_state(sink)) || !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
         return;
 
-    pa_sink_input_set_volume(u->sink_input,
-                             &sink->real_volume,
-                             sink->save_volume,
-                             TRUE );
+    pa_sink_input_set_volume(u->sink_input, &sink->real_volume, sink->save_volume, TRUE );
 }
 
-/**
- * \brief   callback used from the main thread context to mute/unmute the sink
- * \param   sink  this sink
- * \note    This seems like a silly thing. A filter should not influence the
- *          general volume of the stream.
- */
-//TODO: Remove me safely or keep me after discussion with reviewers.
+/* This seems like a silly thing. A filter should not influence the general volume of the stream.
+ * TODO: Remove me safely or keep me after discussion with reviewers. */
 static void sink_set_mute_cb(pa_sink *s) {
     struct userdata *u;
     pa_sink_assert_ref(s);
     pa_assert_se(u = s->userdata);
 
-    if (!PA_SINK_IS_LINKED(pa_sink_get_state(s)) ||
-        !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
+    if (!PA_SINK_IS_LINKED(pa_sink_get_state(s)) || !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
         return;
 
     pa_sink_input_set_mute(u->sink_input, s->muted, s->save_muted);
 }
 
-/**
- * \brief filters the audio data from sink_input
- * \param [in]      sink_input  from whence cometh the noise
- * \param [in]      nbytes      ???
- * \param [in/out]  audio data
+/* filters the audio data from sink_input
  * \return always returns (int)0
- * \note Called from I/O thread context
- */
-static int sink_input_pop_cb(pa_sink_input *sink_input,
+ * \note Called from I/O thread context */
+__attribute__((optimize(3))) static int sink_input_pop_cb(pa_sink_input *sink_input,
                              size_t nbytes,
                              pa_memchunk *chunk) {
     struct userdata *u;
@@ -483,7 +172,7 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
     pa_assert_se(u = sink_input->userdata);
 
     /* Removed: https://bugs.freedesktop.org/show_bug.cgi?id=53915
-    pa_sink_process_rewind(u->sink, 0); */
+     pa_sink_process_rewind(u->sink, 0); */
 
     while (pa_memblockq_peek(u->memblockq, &tchunk) < 0) {
         pa_memchunk nchunk;
@@ -501,14 +190,12 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
 
     chunk->index = 0;
     chunk->length = num_frames * framesize;
-    chunk->memblock = pa_memblock_new(sink_input->sink->core->mempool,
-                                      chunk->length);
+    chunk->memblock = pa_memblock_new(sink_input->sink->core->mempool, chunk->length);
 
     pa_memblockq_drop(u->memblockq, chunk->length);
 
     src = pa_memblock_acquire_chunk(&tchunk);
     dst = pa_memblock_acquire(chunk->memblock);
-
 
     /* (3) PUT YOUR CODE HERE TO DO SOMETHING WITH THE DATA */
     for (frm_idx = 0; frm_idx < num_frames; frm_idx++) {
@@ -519,42 +206,42 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
             dst_sample = dst_frame + chan_idx;
             if (u->filter_map[chan_idx] == 'l') {
                 // stage 1
-                lp = filter_biquad(&(u->s1lpdt[chan_idx]), *(u->lpfs), cur_sample);
+                lp = filter_biquad(& (u->s1lpdt[chan_idx]), * (u->lpfs), cur_sample);
                 bqdtel.w0 = u->s1lpdt[chan_idx].w0;
                 bqdtel.y0 = u->s1lpdt[chan_idx].y0;
-                filter_store_history(u->sink, &bqdtel, 1);
+                filter_store_history(u->s1histbuf, &bqdtel);
                 // stage 2
-                *dst_sample = filter_biquad(&(u->s2lpdt[chan_idx]), *(u->lpfs), &lp);
+                *dst_sample = filter_biquad(& (u->s2lpdt[chan_idx]), * (u->lpfs), &lp);
                 bqdtel.w0 = u->s2lpdt[chan_idx].w0;
                 bqdtel.y0 = u->s2lpdt[chan_idx].y0;
-                filter_store_history(u->sink, &bqdtel, 2);
+                filter_store_history(u->s2histbuf, &bqdtel);
             } else
-            if (u->filter_map[chan_idx] == 'h') {
-                // stage 1
-                hp = filter_biquad(&(u->s1hpdt[chan_idx]), *(u->hpfs), cur_sample);
-                bqdtel.w0 = u->s1hpdt[chan_idx].w0;
-                bqdtel.y0 = u->s1hpdt[chan_idx].y0;
-                filter_store_history(u->sink, &bqdtel, 1);
-                // stage 2
-                *dst_sample = filter_biquad(&(u->s2hpdt[chan_idx]), *(u->hpfs), &hp);
-                bqdtel.w0 = u->s2hpdt[chan_idx].w0;
-                bqdtel.y0 = u->s2hpdt[chan_idx].y0;
-                filter_store_history(u->sink, &bqdtel, 2);
-            } else
-            if (u->filter_map[chan_idx] == 'a') {
-                // stage 1
-                ap = filter_biquad(&(u->s1apdt[chan_idx]), *(u->apfs), cur_sample);
-                bqdtel.w0 = u->s1apdt[chan_idx].w0;
-                bqdtel.y0 = u->s1apdt[chan_idx].y0;
-                filter_store_history(u->sink, &bqdtel, 1);
-                // stage 2
-                *dst_sample = filter_biquad(&(u->s2apdt[chan_idx]), *(u->apfs), &ap);
-                bqdtel.w0 = u->s2apdt[chan_idx].w0;
-                bqdtel.y0 = u->s2apdt[chan_idx].y0;
-                filter_store_history(u->sink, &bqdtel, 2);
-            } else {
-                pa_log_error("Should never get here, even in Jersey.");
-            }
+                if (u->filter_map[chan_idx] == 'h') {
+                    // stage 1
+                    hp = filter_biquad(& (u->s1hpdt[chan_idx]), * (u->hpfs), cur_sample);
+                    bqdtel.w0 = u->s1hpdt[chan_idx].w0;
+                    bqdtel.y0 = u->s1hpdt[chan_idx].y0;
+                    filter_store_history(u->s1histbuf, &bqdtel);
+                    // stage 2
+                    *dst_sample = filter_biquad(& (u->s2hpdt[chan_idx]), * (u->hpfs), &hp);
+                    bqdtel.w0 = u->s2hpdt[chan_idx].w0;
+                    bqdtel.y0 = u->s2hpdt[chan_idx].y0;
+                    filter_store_history(u->s2histbuf, &bqdtel);
+                } else
+                    if (u->filter_map[chan_idx] == 'a') {
+                        // stage 1
+                        ap = filter_biquad(& (u->s1apdt[chan_idx]), * (u->apfs), cur_sample);
+                        bqdtel.w0 = u->s1apdt[chan_idx].w0;
+                        bqdtel.y0 = u->s1apdt[chan_idx].y0;
+                        filter_store_history(u->s1histbuf, &bqdtel);
+                        // stage 2
+                        *dst_sample = filter_biquad(& (u->s2apdt[chan_idx]), * (u->apfs), &ap);
+                        bqdtel.w0 = u->s2apdt[chan_idx].w0;
+                        bqdtel.y0 = u->s2apdt[chan_idx].y0;
+                        filter_store_history(u->s2histbuf, &bqdtel);
+                    } else {
+                        pa_log_error("Should never get here, even in Jersey.");
+                    }
         }
     }
 
@@ -566,14 +253,9 @@ static int sink_input_pop_cb(pa_sink_input *sink_input,
     return (0);
 }
 
-/**
- * \brief Callback function used called from the IO thread context. Causes the
- *        sink to rewind the biquad history buffer.
- * \param [in] sink_input       pointer to the sink input
- * \param [in] rewind_bytes     number of bytes to rewind
- */
-static void sink_input_process_rewind_cb(pa_sink_input *sink_input,
-                                         size_t rewind_bytes) {
+/* Callback function used called from the IO thread context. Causes the sink to
+ * rewind the biquad history buffer. */
+static void sink_input_process_rewind_cb(pa_sink_input *sink_input, size_t rewind_bytes) {
     struct userdata *u;
     size_t amount = 0;
     size_t rewind_frames = 0;
@@ -591,8 +273,7 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input,
         u->sink->thread_info.rewind_nbytes = 0;
 
         if (amount > 0) {
-            pa_memblockq_seek(u->memblockq, -(int64_t) amount, PA_SEEK_RELATIVE,
-                              TRUE );
+            pa_memblockq_seek(u->memblockq, -(int64_t)amount, PA_SEEK_RELATIVE, TRUE );
             /* (5) PUT YOUR CODE HERE TO REWIND YOUR FILTER  */
             rewind_samples = amount / pa_sample_size_of_format(u->sample_spec.format);
             rewind_frames = rewind_samples / u->sample_spec.channels;
@@ -605,61 +286,60 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input,
                 u->s1histbuf->idx -= rewind_samples;
             } else {
                 //doh! gotta wrap.
-                u->s1histbuf->idx = u->s1histbuf->length -
-                                     (rewind_samples - u->s1histbuf->idx);
+                u->s1histbuf->idx = u->s1histbuf->length - (rewind_samples - u->s1histbuf->idx);
             }
             frame_size = u->sample_spec.channels * sizeof(biquad_data_element);
-            for (i=0; i < u->sample_spec.channels; i++) {
+            for (i = 0; i < u->sample_spec.channels; i++) {
                 switch (u->filter_map[i]) {
                     case 'l': {
                         // stage 1
                         u->s1lpdt[i].w2 = u->s1histbuf->buffer[i].w0;
-                        u->s1lpdt[i].w1 = u->s1histbuf->buffer[i+frame_size].w0;
-                        u->s1lpdt[i].w0 = u->s1histbuf->buffer[i+2*frame_size].w0;
+                        u->s1lpdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
+                        u->s1lpdt[i].w0 = u->s1histbuf->buffer[i + 2 * frame_size].w0;
                         u->s1lpdt[i].y2 = u->s1histbuf->buffer[i].y0;
-                        u->s1lpdt[i].y1 = u->s1histbuf->buffer[i+frame_size].y0;
-                        u->s1lpdt[i].y0 = u->s1histbuf->buffer[i+2*frame_size].y0;
+                        u->s1lpdt[i].y1 = u->s1histbuf->buffer[i + frame_size].y0;
+                        u->s1lpdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
                         // stage 2
                         u->s2lpdt[i].w2 = u->s1histbuf->buffer[i].w0;
-                        u->s2lpdt[i].w1 = u->s1histbuf->buffer[i+frame_size].w0;
-                        u->s2lpdt[i].w0 = u->s1histbuf->buffer[i+2*frame_size].w0;
+                        u->s2lpdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
+                        u->s2lpdt[i].w0 = u->s1histbuf->buffer[i + 2 * frame_size].w0;
                         u->s2lpdt[i].y2 = u->s1histbuf->buffer[i].y0;
-                        u->s2lpdt[i].y1 = u->s1histbuf->buffer[i+frame_size].y0;
-                        u->s2lpdt[i].y0 = u->s1histbuf->buffer[i+2*frame_size].y0;
+                        u->s2lpdt[i].y1 = u->s1histbuf->buffer[i + frame_size].y0;
+                        u->s2lpdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
                         break;
                     }
                     case 'h': {
                         // stage 1
                         u->s1hpdt[i].w2 = u->s1histbuf->buffer[i].w0;
-                        u->s1hpdt[i].w1 = u->s1histbuf->buffer[i+frame_size].w0;
-                        u->s1hpdt[i].w0 = u->s1histbuf->buffer[i+2*frame_size].w0;
+                        u->s1hpdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
+                        u->s1hpdt[i].w0 = u->s1histbuf->buffer[i + 2 * frame_size].w0;
                         u->s1hpdt[i].y2 = u->s1histbuf->buffer[i].y0;
-                        u->s1hpdt[i].y1 = u->s1histbuf->buffer[i+frame_size].y0;
-                        u->s1hpdt[i].y0 = u->s1histbuf->buffer[i+2*frame_size].y0;
+                        u->s1hpdt[i].y1 = u->s1histbuf->buffer[i + frame_size].y0;
+                        u->s1hpdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
                         // stage 2
                         u->s2hpdt[i].w2 = u->s1histbuf->buffer[i].w0;
-                        u->s2hpdt[i].w1 = u->s1histbuf->buffer[i+frame_size].w0;
-                        u->s2hpdt[i].w0 = u->s1histbuf->buffer[i+2*frame_size].w0;
+                        u->s2hpdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
+                        u->s2hpdt[i].w0 = u->s1histbuf->buffer[i + 2 * frame_size].w0;
                         u->s2hpdt[i].y2 = u->s1histbuf->buffer[i].y0;
-                        u->s2hpdt[i].y1 = u->s1histbuf->buffer[i+frame_size].y0;
-                        u->s2hpdt[i].y0 = u->s1histbuf->buffer[i+2*frame_size].y0;
+                        u->s2hpdt[i].y1 = u->s1histbuf->buffer[i + frame_size].y0;
+                        u->s2hpdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
                         break;
                     }
                     case 'a': {
                         // stage 1
                         u->s1apdt[i].w2 = u->s1histbuf->buffer[i].w0;
-                        u->s1apdt[i].w1 = u->s1histbuf->buffer[i+frame_size].w0;
-                        u->s1apdt[i].w0 = u->s1histbuf->buffer[i+2*frame_size].w0;
+                        u->s1apdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
+                        u->s1apdt[i].w0 = u->s1histbuf->buffer[i + 2 * frame_size].w0;
                         u->s1apdt[i].y2 = u->s1histbuf->buffer[i].y0;
-                        u->s1apdt[i].y1 = u->s1histbuf->buffer[i+frame_size].y0;
-                        u->s1apdt[i].y0 = u->s1histbuf->buffer[i+2*frame_size].y0;
+                        u->s1apdt[i].y1 = u->s1histbuf->buffer[i + frame_size].y0;
+                        u->s1apdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
                         // stage 2
                         u->s2apdt[i].w2 = u->s1histbuf->buffer[i].w0;
-                        u->s2apdt[i].w1 = u->s1histbuf->buffer[i+frame_size].w0;
-                        u->s2apdt[i].w0 = u->s1histbuf->buffer[i+2*frame_size].w0;
+                        u->s2apdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
+                        u->s2apdt[i].w0 = u->s1histbuf->buffer[i + 2 * frame_size].w0;
                         u->s2apdt[i].y2 = u->s1histbuf->buffer[i].y0;
-                        u->s2apdt[i].y1 = u->s1histbuf->buffer[i+frame_size].y0;
-                        u->s2apdt[i].y0 = u->s1histbuf->buffer[i+2*frame_size].y0;
+                        u->s2apdt[i].y1 = u->s1histbuf->buffer[i + frame_size].y0;
+                        u->s2apdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
                         break;
                     }
                 }
@@ -674,15 +354,8 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input,
     pa_memblockq_rewind(u->memblockq, rewind_bytes);
 }
 
-/**
- * \brief callback function used from IO thread context to update this sink's
- *        input's max_rewind
- * \param [in/out] sink_input   pointer to this sink's input
- * \param [in]     max_rewind   new max_rewind size in bytes
- */
 /* FIXME: Too small max_rewind: https://bugs.freedesktop.org/show_bug.cgi?id=53709 */
-static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input,
-                                            size_t max_rewind) {
+static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t max_rewind) {
     struct userdata *u;
     size_t shrinkage = 0;
     size_t growth = 0;
@@ -691,25 +364,19 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input,
     pa_assert_se(u = sink_input->userdata);
 
     if (max_rewind == u->sink->thread_info.max_rewind) {
-        fprintf(stderr,
-                "JZ: %s[%d]\n\t called without changing size.\n"
-                "\tmax_rewind = %lu samples\n",
-                __func__, __LINE__, max_rewind/u->sz_smp);
+        pa_log_warn("JZ: %s[%d]\n\t called without changing size.\n\tmax_rewind = %lu samples\n",
+                    __func__, __LINE__, max_rewind / u->sz_smp);
         pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
         pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
         return;
     }
 
-    if ((max_rewind / u->sz_frm) < MIN_MAX_REWIND_FRAMES) {
+    if ( (max_rewind / u->sz_frm) < MIN_MAX_REWIND_FRAMES) {
         // This is an attempt to prevent excessive realloc shrinks and grows
-        fprintf(stderr,
-                "JZ: %s[%d]\n\t called with too small size.\n"
-                "\tmax_rewind = %lu samples\n",
-                __func__, __LINE__, max_rewind/u->sz_smp);
-        pa_memblockq_set_maxrewind(u->memblockq,
-                                   MIN_MAX_REWIND_FRAMES * u->sz_frm);
-        pa_sink_set_max_rewind_within_thread(u->sink,
-                                             MIN_MAX_REWIND_FRAMES * u->sz_frm);
+        pa_log_warn("JZ: %s[%d]\n\t called with too small size.\n\tmax_rewind = %lu samples\n",
+                    __func__, __LINE__, max_rewind / u->sz_smp);
+        pa_memblockq_set_maxrewind(u->memblockq, MIN_MAX_REWIND_FRAMES * u->sz_frm);
+        pa_sink_set_max_rewind_within_thread(u->sink, MIN_MAX_REWIND_FRAMES * u->sz_frm);
         return;
     }
 
@@ -717,156 +384,92 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input,
     if (max_rewind > u->sink->thread_info.max_rewind) {
         // convert to num samples
         growth = (max_rewind / u->sz_smp) - u->s1histbuf->length;
-        fprintf(stderr,
-                "JZ: %s[%d] all in samples\n"
-                "\tcur max_rewind = % 12lu\n"
-                "\treq max_rewind = % 12lu\n"
-                "\tgrowth =         % 12lu\n"
-                "\tidx =            % 12lu\n"
-                "\tlength =         % 12lu\n",
-                __func__, __LINE__, u->sink->thread_info.max_rewind / u->sz_smp,
-                max_rewind / u->sz_smp, growth,
-                u->s1histbuf->idx, u->s1histbuf->length);
+        pa_log_debug("JZ: %s[%d] all in samples\n\tcur max_rewind = %12lu\n\treq max_rewind = %12lu\n"
+                     "\tgrowth =         %12lu\n\tidx =            %12lu\n\tlength =         %12lu\n",
+                     __func__, __LINE__, u->sink->thread_info.max_rewind / u->sz_smp, max_rewind / u->sz_smp, growth,
+                     u->s1histbuf->idx, u->s1histbuf->length);
         // stage 1
-        u->s1histbuf->buffer = realloc(u->s1histbuf->buffer,
-                                       (sizeof(biquad_data_element) *
-                                        (u->s1histbuf->length + growth)));
-        for (i = u->s1histbuf->length;
-             i < (u->s1histbuf->length + growth);
-             i++) {
+        u->s1histbuf->buffer = realloc(u->s1histbuf->buffer, (sizeof(biquad_data_element) * (u->s1histbuf->length + growth)));
+        for (i = u->s1histbuf->length; i < (u->s1histbuf->length + growth); i++) {
             u->s1histbuf->buffer[i].w0 = 0.0;
             u->s1histbuf->buffer[i].y0 = 0.0;
         }
         u->s1histbuf->length += growth;
         // stage 2
-        u->s2histbuf->buffer = realloc(u->s2histbuf->buffer,
-                                       (sizeof(biquad_data_element) *
-                                        (u->s2histbuf->length + growth)));
-        for (i=u->s2histbuf->length; i<(u->s2histbuf->length+growth); i++) {
+        u->s2histbuf->buffer = realloc(u->s2histbuf->buffer, (sizeof(biquad_data_element) * (u->s2histbuf->length + growth)));
+        for (i = u->s2histbuf->length; i < (u->s2histbuf->length + growth); i++) {
             u->s2histbuf->buffer[i].w0 = 0.0;
             u->s2histbuf->buffer[i].y0 = 0.0;
         }
         u->s2histbuf->length += growth;
         pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
         pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
-   }
+    }
 
     // shrink to new size
     if (max_rewind < u->sink->thread_info.max_rewind) {
         // convert to num samples
-        shrinkage = (u->sink->thread_info.max_rewind -
-                     max_rewind) / u->sz_smp;
+        shrinkage = (u->sink->thread_info.max_rewind - max_rewind) / u->sz_smp;
         // loop through and move everybody back by shrinkage
-        fprintf(stderr,
-                "JZ: %s[%d] all in samples\n"
-                "\tcur max_rewind = % 12lu\n"
-                "\treq max_rewind = % 12lu\n"
-                "\tshrinkage =      % 12lu\n"
-                "\tidx =            % 12lu\n"
-                "\tlength =         % 12lu\n",
-                __FILE__, __LINE__, u->sink->thread_info.max_rewind / u->sz_smp,
-                max_rewind / u->sz_smp, shrinkage,
+        pa_log_debug("JZ: %s[%d] all in samples\n"
+                "\tcur max_rewind = %12lu\n"
+                "\treq max_rewind = %12lu\n"
+                "\tshrinkage =      %12lu\n"
+                "\tidx =            %12lu\n"
+                "\tlength =         %12lu\n",
+                __FILE__, __LINE__, u->sink->thread_info.max_rewind / u->sz_smp, max_rewind / u->sz_smp, shrinkage,
                 u->s1histbuf->idx, u->s1histbuf->length);
 
         // stage 1
-        fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
-        for (i=0; i<shrinkage; i++) {
-            u->s1histbuf->buffer[i + (u->s1histbuf->length - shrinkage)] =
-                    u->s1histbuf->buffer[i];
-        }
-        fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
-        for (i=0; i<(u->s1histbuf->length - shrinkage); i++) {
-            u->s1histbuf->buffer[i] = u->s1histbuf->buffer[i+shrinkage];
-        }
-        fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
+        for (i = 0; i < shrinkage; i++)
+            u->s1histbuf->buffer[i + (u->s1histbuf->length - shrinkage)] = u->s1histbuf->buffer[i];
+        for (i = 0; i < (u->s1histbuf->length - shrinkage); i++)
+            u->s1histbuf->buffer[i] = u->s1histbuf->buffer[i + shrinkage];
         u->s1histbuf->length -= shrinkage;
-        fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
-        u->s1histbuf->buffer = realloc(u->s1histbuf->buffer,
-                                       (sizeof(biquad_data_element) *
-                                        u->s1histbuf->length));
-        fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
-        if (u->s1histbuf->idx > shrinkage) {
+        u->s1histbuf->buffer = realloc(u->s1histbuf->buffer, (sizeof(biquad_data_element) * u->s1histbuf->length));
+        if (u->s1histbuf->idx > shrinkage)
             u->s1histbuf->idx -= shrinkage;
-            fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
-        } else {
-            u->s1histbuf->idx = u->s1histbuf->length -
-                                 (shrinkage - u->s1histbuf->idx);
-            fprintf(stderr, "JZ: %s[%d]\n", __FILE__, __LINE__);
-        }
+        else
+            u->s1histbuf->idx = u->s1histbuf->length - (shrinkage - u->s1histbuf->idx);
 
         // stage 2
-        for (i=0; i<shrinkage; i++) {
-            u->s2histbuf->buffer[i + (u->s2histbuf->length - shrinkage)] =
-                    u->s2histbuf->buffer[i];
-        }
-        for (i=0; i<(u->s2histbuf->length - shrinkage); i++) {
-            u->s2histbuf->buffer[i] = u->s2histbuf->buffer[i+shrinkage];
-        }
+        for (i = 0; i < shrinkage; i++)
+            u->s2histbuf->buffer[i + (u->s2histbuf->length - shrinkage)] = u->s2histbuf->buffer[i];
+        for (i = 0; i < (u->s2histbuf->length - shrinkage); i++)
+            u->s2histbuf->buffer[i] = u->s2histbuf->buffer[i + shrinkage];
         u->s2histbuf->length -= shrinkage;
-        u->s2histbuf->buffer = realloc(u->s2histbuf->buffer,
-                                       (sizeof(biquad_data_element) *
-                                        u->s2histbuf->length));
+        u->s2histbuf->buffer = realloc(u->s2histbuf->buffer, (sizeof(biquad_data_element) * u->s2histbuf->length));
         if (u->s2histbuf->idx > shrinkage)
             u->s2histbuf->idx -= shrinkage;
         else
-            u->s2histbuf->idx = u->s2histbuf->length -
-                                 (shrinkage - u->s2histbuf->idx);
+            u->s2histbuf->idx = u->s2histbuf->length - (shrinkage - u->s2histbuf->idx);
         pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
         pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
     }
 }
 
-/**
- * \fn sink_input_update_max_request_cb
- * \brief Callback function used from IO thread context to update this sink's
- *        input's max_request.
- * \param [in/out]  sink_input  this sink's input
- * \param [in]      max_request the new max request size
- */
-static void sink_input_update_max_request_cb(pa_sink_input *sink_input,
-                                             size_t max_request) {
+static void sink_input_update_max_request_cb(pa_sink_input *sink_input, size_t max_request) {
     struct userdata *u;
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
     pa_sink_set_max_request_within_thread(u->sink, max_request);
 }
 
-/**
- * \brief   callback used from IO thread context to update this sink's latency
- *          with the latency from this sink's input ???
- * \param   sink_input  pointer to this sink's input
- */
-//TODO: document me better
 static void sink_input_update_sink_latency_range_cb(pa_sink_input *sink_input) {
     struct userdata *u;
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
-    pa_sink_set_latency_range_within_thread(u->sink,
-                                            sink_input->sink->thread_info.min_latency,
+    pa_sink_set_latency_range_within_thread(u->sink, sink_input->sink->thread_info.min_latency,
                                             sink_input->sink->thread_info.max_latency);
 }
 
-/**
- * \brief   callback used from IO thread context to update this sink's latency
- *          with the latency from this sink's input ???
- * \param   sink_input  pointer to this sink's input
- */
-//TODO: document me better
 static void sink_input_update_sink_fixed_latency_cb(pa_sink_input *i) {
     struct userdata *u;
     pa_sink_input_assert_ref(i);
     pa_assert_se(u = i->userdata);
-    pa_sink_set_fixed_latency_within_thread(u->sink,
-                                            i->sink->thread_info.fixed_latency);
+    pa_sink_set_fixed_latency_within_thread(u->sink, i->sink->thread_info.fixed_latency);
 }
 
-/* Called from I/O thread context */
-/**
- * \brief   Callback used from IO thread context to detach an input from this
- *          sink.
- * \param   sink_input
- */
-//TODO: document me better
 static void sink_input_detach_cb(pa_sink_input *sink_input) {
     struct userdata *u;
     pa_sink_input_assert_ref(sink_input);
@@ -875,25 +478,21 @@ static void sink_input_detach_cb(pa_sink_input *sink_input) {
     pa_sink_set_rtpoll(u->sink, NULL );
 }
 
-/**\brief   Callback used from IO thread to attach an input to this sink.
- *          Importantly, this is where the rewind buffer gets allocated, not in
- *          pa__init. */
+/* Callback used from IO thread to attach an input to this sink. Importantly,
+ * this is where the rewind buffer gets allocated, not in pa__init. */
 static void sink_input_attach_cb(pa_sink_input *input) {
     struct userdata *u;
     pa_sink_input_assert_ref(input);
     pa_assert_se(u = input->userdata);
 
     pa_sink_set_rtpoll(u->sink, input->sink->thread_info.rtpoll);
-    pa_sink_set_latency_range_within_thread(u->sink,
-                                            input->sink->thread_info.min_latency,
+    pa_sink_set_latency_range_within_thread(u->sink, input->sink->thread_info.min_latency,
                                             input->sink->thread_info.max_latency);
-    pa_sink_set_fixed_latency_within_thread(u->sink,
-                                            input->sink->thread_info.fixed_latency);
-    pa_sink_set_max_request_within_thread(u->sink,
-                                          pa_sink_input_get_max_request(input));
+    pa_sink_set_fixed_latency_within_thread(u->sink, input->sink->thread_info.fixed_latency);
+    pa_sink_set_max_request_within_thread(u->sink, pa_sink_input_get_max_request(input));
 
     /* Alloc the rewind buffer */
-    if ((u->sink->thread_info.max_rewind / u->sz_frm) < MIN_MAX_REWIND_FRAMES) {
+    if ( (u->sink->thread_info.max_rewind / u->sz_frm) < MIN_MAX_REWIND_FRAMES) {
         u->s1histbuf->length = MIN_MAX_REWIND_FRAMES * u->sample_spec.channels;
         u->s2histbuf->length = MIN_MAX_REWIND_FRAMES * u->sample_spec.channels;
         u->sink->thread_info.max_rewind = MIN_MAX_REWIND_FRAMES * u->sz_frm;
@@ -901,27 +500,16 @@ static void sink_input_attach_cb(pa_sink_input *input) {
         u->s1histbuf->length = u->sink->thread_info.max_rewind / u->sz_smp;
         u->s2histbuf->length = u->sink->thread_info.max_rewind / u->sz_smp;
     }
-    u->s1histbuf->buffer = calloc(u->s1histbuf->length,
-                                   sizeof(biquad_data_element));
-    u->s2histbuf->buffer = calloc(u->s2histbuf->length,
-                                   sizeof(biquad_data_element));
+    u->s1histbuf->buffer = calloc(u->s1histbuf->length, sizeof(biquad_data_element));
+    u->s2histbuf->buffer = calloc(u->s2histbuf->length, sizeof(biquad_data_element));
 
     /* FIXME: Too small max_rewind:
      * https://bugs.freedesktop.org/show_bug.cgi?id=53709 */
-    pa_sink_set_max_rewind_within_thread(u->sink,
-                                         pa_sink_input_get_max_rewind(input));
+    pa_sink_set_max_rewind_within_thread(u->sink, pa_sink_input_get_max_rewind(input));
 
     pa_sink_attach_within_thread(u->sink);
 }
 
-/**
- * \fn sink_input_kill_cb
- * \brief   Callback used by main thread context to remove this sink's input.
- * \details The order here matters! We first kill the sink input, followed by
- *          the sink. That means the sink callbacks must be protected against
- *          an unconnected sink input!
- * \param [in]  sink_input  pointer to the victim, this sink's input
- */
 static void sink_input_kill_cb(pa_sink_input *sink_input) {
     struct userdata *u;
     pa_sink_input_assert_ref(sink_input);
@@ -936,34 +524,28 @@ static void sink_input_kill_cb(pa_sink_input *sink_input) {
     pa_sink_unref(u->sink);
     u->sink = NULL;
 
-    //TODO: document why we unload
     pa_module_unload_request(u->module, TRUE );
 }
 
-/* Called from IO thread context */
-static void sink_input_state_change_cb(pa_sink_input *i,
-                                       pa_sink_input_state_t state) {
+static void sink_input_state_change_cb(pa_sink_input *i, pa_sink_input_state_t state) {
     struct userdata *u;
     pa_sink_input_assert_ref(i);
     pa_assert_se(u = i->userdata);
     /* If we are added for the first time, ask for a rewinding so that we are
      * heard right-away. */
-    if (PA_SINK_INPUT_IS_LINKED(state) && i->thread_info.state
-            == PA_SINK_INPUT_INIT) {
+    if (PA_SINK_INPUT_IS_LINKED(state) && i->thread_info.state == PA_SINK_INPUT_INIT) {
         pa_log_debug("Requesting rewind due to state change.");
         pa_sink_input_request_rewind(i, 0, FALSE, TRUE, TRUE );
     }
 }
 
-/* Called from main context */
 static pa_bool_t sink_input_may_move_to_cb(pa_sink_input *i, pa_sink *dest) {
     struct userdata *u;
     pa_sink_input_assert_ref(i);
     pa_assert_se(u = i->userdata);
-    return(u->sink != dest);
+    return (u->sink != dest);
 }
 
-/* Called from main context */
 static void sink_input_moving_cb(pa_sink_input *i, pa_sink *dest) {
     struct userdata *u;
 
@@ -972,8 +554,7 @@ static void sink_input_moving_cb(pa_sink_input *i, pa_sink *dest) {
 
     if (dest) {
         pa_sink_set_asyncmsgq(u->sink, dest->asyncmsgq);
-        pa_sink_update_flags(u->sink, PA_SINK_LATENCY | PA_SINK_DYNAMIC_LATENCY,
-                             dest->flags);
+        pa_sink_update_flags(u->sink, PA_SINK_LATENCY | PA_SINK_DYNAMIC_LATENCY, dest->flags);
     } else
         pa_sink_set_asyncmsgq(u->sink, NULL );
 
@@ -983,17 +564,14 @@ static void sink_input_moving_cb(pa_sink_input *i, pa_sink *dest) {
 
         pl = pa_proplist_new();
         z = pa_proplist_gets(dest->proplist, PA_PROP_DEVICE_DESCRIPTION);
-        pa_proplist_setf(
-                pl, PA_PROP_DEVICE_DESCRIPTION, "lfe-lp %s on %s",
-                pa_proplist_gets(u->sink->proplist, "device.vsink.name"),
-                z ? z : dest->name);
+        pa_proplist_setf(pl, PA_PROP_DEVICE_DESCRIPTION, "lfe-lp %s on %s",
+                         pa_proplist_gets(u->sink->proplist, "device.vsink.name"), z ? z : dest->name);
 
         pa_sink_update_proplist(u->sink, PA_UPDATE_REPLACE, pl);
         pa_proplist_free(pl);
     }
 }
 
-/* Called from main context */
 static void sink_input_volume_changed_cb(pa_sink_input *i) {
     struct userdata *u;
     pa_sink_input_assert_ref(i);
@@ -1001,7 +579,6 @@ static void sink_input_volume_changed_cb(pa_sink_input *i) {
     pa_sink_volume_changed(u->sink, &i->volume);
 }
 
-/* Called from main context */
 static void sink_input_mute_changed_cb(pa_sink_input *i) {
     struct userdata *u;
     pa_sink_input_assert_ref(i);
@@ -1009,11 +586,6 @@ static void sink_input_mute_changed_cb(pa_sink_input *i) {
     pa_sink_mute_changed(u->sink, i->muted);
 }
 
-/**
- * \brief   Setup the sink.
- * \param   module  pointer to this module
- * \return  always returns 0
- */
 int pa__init(pa_module *module) {
     struct userdata *u;
     pa_channel_map map;
@@ -1027,14 +599,12 @@ int pa__init(pa_module *module) {
 
     pa_assert(module);
 
-    if (!(ma = pa_modargs_new(module->argument, valid_modargs))) {
+    if (! (ma = pa_modargs_new(module->argument, valid_modargs))) {
         pa_log("Failed to parse module arguments.");
         goto fail;
     }
 
-    if (!(master = pa_namereg_get(module->core,
-                                  pa_modargs_get_value(ma, "master", NULL ),
-                                  PA_NAMEREG_SINK))) {
+    if (! (master = pa_namereg_get(module->core, pa_modargs_get_value(ma, "master", NULL ), PA_NAMEREG_SINK))) {
         pa_log("Master sink not found");
         goto fail;
     }
@@ -1060,10 +630,7 @@ int pa__init(pa_module *module) {
     u->sample_spec.format = PA_SAMPLE_FLOAT32;
 
     map = master->channel_map;
-    if (pa_modargs_get_sample_spec_and_channel_map(ma,
-                                                   &u->sample_spec,
-                                                   &map,
-                                                   PA_CHANNEL_MAP_DEFAULT) < 0) {
+    if (pa_modargs_get_sample_spec_and_channel_map(ma, &u->sample_spec, &map, PA_CHANNEL_MAP_DEFAULT) < 0) {
         pa_log("Invalid sample format specification or channel map");
         goto fail;
     }
@@ -1095,14 +662,12 @@ int pa__init(pa_module *module) {
         pa_log_info("\t%d %c\n", i, u->filter_map[i]);
     }
 
-    if (pa_modargs_get_value_boolean(ma, "use_volume_sharing",
-                                     &use_volume_sharing) < 0) {
+    if (pa_modargs_get_value_boolean(ma, "use_volume_sharing", &use_volume_sharing) < 0) {
         pa_log("use_volume_sharing= expects a boolean argument");
         goto fail;
     }
 
-    if (pa_modargs_get_value_boolean(ma, "force_flat_volume",
-                                     &force_flat_volume) < 0) {
+    if (pa_modargs_get_value_boolean(ma, "force_flat_volume", &force_flat_volume) < 0) {
         pa_log("force_flat_volume= expects a boolean argument");
         goto fail;
     }
@@ -1119,31 +684,25 @@ int pa__init(pa_module *module) {
     pa_sink_new_data_init(&sink_data);
     sink_data.driver = __FILE__;
     sink_data.module = module;
-    if (!(sink_data.name = pa_xstrdup(
-            pa_modargs_get_value(ma, "sink_name", NULL )))) {
+    if (! (sink_data.name = pa_xstrdup(pa_modargs_get_value(ma, "sink_name", NULL )))) {
         sink_data.name = pa_sprintf_malloc("%s.lfe_lp", master->name);
     }
     pa_sink_new_data_set_sample_spec(&sink_data, &u->sample_spec);
     pa_sink_new_data_set_channel_map(&sink_data, &map);
-    pa_proplist_sets(sink_data.proplist, PA_PROP_DEVICE_MASTER_DEVICE,
-                     master->name);
+    pa_proplist_sets(sink_data.proplist, PA_PROP_DEVICE_MASTER_DEVICE, master->name);
     pa_proplist_sets(sink_data.proplist, PA_PROP_DEVICE_CLASS, "filter");
     pa_proplist_sets(sink_data.proplist, "device.name", sink_data.name);
 
-    if (pa_modargs_get_proplist(ma, "sink_properties", sink_data.proplist,
-                                PA_UPDATE_REPLACE)
-        < 0) {
+    if (pa_modargs_get_proplist(ma, "sink_properties", sink_data.proplist, PA_UPDATE_REPLACE) < 0) {
         pa_log("Invalid properties");
         pa_sink_new_data_done(&sink_data);
         goto fail;
     }
 
-    if ((u->auto_desc = !pa_proplist_contains(sink_data.proplist,
-                                              PA_PROP_DEVICE_DESCRIPTION))) {
+    if ( (u->auto_desc = !pa_proplist_contains(sink_data.proplist, PA_PROP_DEVICE_DESCRIPTION))) {
         const char *z;
         z = pa_proplist_gets(master->proplist, PA_PROP_DEVICE_DESCRIPTION);
-        pa_proplist_setf(sink_data.proplist, PA_PROP_DEVICE_DESCRIPTION,
-                         "lfe_lp %s on %s", sink_data.name,
+        pa_proplist_setf(sink_data.proplist, PA_PROP_DEVICE_DESCRIPTION, "lfe_lp %s on %s", sink_data.name,
                          z ? z : master->name);
     }
 
@@ -1151,11 +710,11 @@ int pa__init(pa_module *module) {
 #ifndef PA_SINK_SHARE_VOLUME_WITH_MASTER
 #define PA_SINK_SHARE_VOLUME_WITH_MASTER 0x1000000U
 #endif
-    u->sink = pa_sink_new(module->core,
-                          &sink_data,
-                          (master->flags &
-                           (PA_SINK_LATENCY | PA_SINK_DYNAMIC_LATENCY)) |
-                          (use_volume_sharing ? PA_SINK_SHARE_VOLUME_WITH_MASTER : 0));
+    u->sink = pa_sink_new(
+            module->core,
+            &sink_data,
+            (master->flags & (PA_SINK_LATENCY | PA_SINK_DYNAMIC_LATENCY)) | (
+                    use_volume_sharing ? PA_SINK_SHARE_VOLUME_WITH_MASTER : 0));
     pa_sink_new_data_done(&sink_data);
 
     if (!u->sink) {
@@ -1185,10 +744,8 @@ int pa__init(pa_module *module) {
     sink_input_data.module = module;
     pa_sink_input_new_data_set_sink(&sink_input_data, master, FALSE );
     sink_input_data.origin_sink = u->sink;
-    pa_proplist_setf(
-            sink_input_data.proplist, PA_PROP_MEDIA_NAME,
-            "lfe-lp Stream from %s",
-            pa_proplist_gets(u->sink->proplist, PA_PROP_DEVICE_DESCRIPTION));
+    pa_proplist_setf(sink_input_data.proplist, PA_PROP_MEDIA_NAME, "lfe-lp Stream from %s",
+                     pa_proplist_gets(u->sink->proplist, PA_PROP_DEVICE_DESCRIPTION));
     pa_proplist_sets(sink_input_data.proplist, PA_PROP_MEDIA_ROLE, "filter");
     pa_sink_input_new_data_set_sample_spec(&sink_input_data, &u->sample_spec);
     pa_sink_input_new_data_set_channel_map(&sink_input_data, &map);
@@ -1203,18 +760,15 @@ int pa__init(pa_module *module) {
     u->sink_input->process_rewind = sink_input_process_rewind_cb;
     u->sink_input->update_max_rewind = sink_input_update_max_rewind_cb;
     u->sink_input->update_max_request = sink_input_update_max_request_cb;
-    u->sink_input->update_sink_latency_range =
-            sink_input_update_sink_latency_range_cb;
-    u->sink_input->update_sink_fixed_latency =
-            sink_input_update_sink_fixed_latency_cb;
+    u->sink_input->update_sink_latency_range = sink_input_update_sink_latency_range_cb;
+    u->sink_input->update_sink_fixed_latency = sink_input_update_sink_fixed_latency_cb;
     u->sink_input->kill = sink_input_kill_cb;
     u->sink_input->attach = sink_input_attach_cb;
     u->sink_input->detach = sink_input_detach_cb;
     u->sink_input->state_change = sink_input_state_change_cb;
     u->sink_input->may_move_to = sink_input_may_move_to_cb;
     u->sink_input->moving = sink_input_moving_cb;
-    u->sink_input->volume_changed =
-            use_volume_sharing ? NULL : sink_input_volume_changed_cb;
+    u->sink_input->volume_changed = use_volume_sharing ? NULL : sink_input_volume_changed_cb;
     u->sink_input->mute_changed = sink_input_mute_changed_cb;
     u->sink_input->userdata = u;
 
@@ -1235,7 +789,7 @@ int pa__init(pa_module *module) {
     /* (9) INITIALIZE ANYTHING ELSE YOU NEED HERE */
     // setup shortcuts to common type sizes
     u->sz_bqf = sizeof(biquad_factors);
-    u->sz_smp = pa_sample_size(&(u->sample_spec));
+    u->sz_smp = pa_sample_size(& (u->sample_spec));
     u->sz_frm = u->sz_smp * u->sample_spec.channels;
 
     // alloc filter factors
@@ -1273,35 +827,42 @@ int pa__init(pa_module *module) {
     u->s2histbuf->buffer = NULL;
 
     // init filter data
-    filter_calc_factors(u->sink);
-    filter_init_bqdt(u->sink);
+    filter_calc_factors(u->apfs, u->sink->sample_spec.rate, u->lpfreq, 'a', 1);
+    filter_calc_factors(u->hpfs, u->sink->sample_spec.rate, u->lpfreq, 'h', 1);
+    filter_calc_factors(u->lpfs, u->sink->sample_spec.rate, u->lpfreq, 'l', 1);
+
+    filter_init_bqdt(u->s1apdt, u->sample_spec.channels);
+    filter_init_bqdt(u->s1hpdt, u->sample_spec.channels);
+    filter_init_bqdt(u->s1lpdt, u->sample_spec.channels);
+    filter_init_bqdt(u->s2apdt, u->sample_spec.channels);
+    filter_init_bqdt(u->s2hpdt, u->sample_spec.channels);
+    filter_init_bqdt(u->s2lpdt, u->sample_spec.channels);
 
     pa_sink_put(u->sink);
     pa_sink_input_put(u->sink_input);
     pa_modargs_free(ma);
     pa_log_debug("JZ: %s[%d] finished lfe-lp.pa__init().\n", __FILE__, __LINE__);
-    return(0);
+    return (0);
 
     fail: if (ma)
         pa_modargs_free(ma);
     pa__done(module);
-    return(-1);
+    return (-1);
 }
 
 int pa__get_n_used(pa_module *m) {
     struct userdata *u;
     pa_assert(m);
     pa_assert_se(u = m->userdata);
-    return(pa_sink_linked_by(u->sink));
+    return (pa_sink_linked_by(u->sink));
 }
 
-/**\brief   We're done, let's cleanup.
- * \note    See comments in sink_input_kill_cb() above about destruction order! */
+/* \note    See comments in sink_input_kill_cb() above about destruction order! */
 void pa__done(pa_module*m) {
     struct userdata *u;
     pa_assert(m);
 
-    if (!(u = m->userdata))
+    if (! (u = m->userdata))
         return;
 
     if (u->lpfs)
@@ -1316,8 +877,8 @@ void pa__done(pa_module*m) {
         free(u->s1hpdt);
     if (u->s1apdt)
         free(u->s1apdt);
-    if ((*(u->s1histbuf)).buffer)
-        free((*(u->s1histbuf)).buffer);
+    if ( (* (u->s1histbuf)).buffer)
+        free( (* (u->s1histbuf)).buffer);
     if (u->s1histbuf)
         free(u->s1histbuf);
     if (u->s2lpdt)
@@ -1326,8 +887,8 @@ void pa__done(pa_module*m) {
         free(u->s2hpdt);
     if (u->s2apdt)
         free(u->s2apdt);
-    if ((*(u->s2histbuf)).buffer)
-        free((*(u->s2histbuf)).buffer);
+    if ( (* (u->s2histbuf)).buffer)
+        free( (* (u->s2histbuf)).buffer);
     if (u->s2histbuf)
         free(u->s2histbuf);
 
@@ -1343,5 +904,5 @@ void pa__done(pa_module*m) {
         pa_memblockq_free(u->memblockq);
 
     pa_xfree(u);
-    pa_log_debug("JZ: %s[%d] All done. Bye.", __FILE__, __LINE__);
+    pa_log_debug("JZ: %s[%d] All done. Bye from module-lfe-lp.", __FILE__, __LINE__);
 }

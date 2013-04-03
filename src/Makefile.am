@@ -1607,7 +1607,7 @@ module_ladspa_sink_la_CFLAGS += $(DBUS_CFLAGS)
 module_ladspa_sink_la_LIBADD += $(DBUS_LIBS)
 endif
 
-module_lfe_lp_la_SOURCES = modules/module-lfe-lp.c
+module_lfe_lp_la_SOURCES = modules/module-lfe-lp.c modules/biquad/biquad-filter.c modules/biquad/biquad-filter.h
 module_lfe_lp_la_LDFLAGS = $(MODULE_LDFLAGS)
 module_lfe_lp_la_LIBADD = $(MODULE_LIBADD) $(LIBLTDL)
 
