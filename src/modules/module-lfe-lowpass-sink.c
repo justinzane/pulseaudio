@@ -127,7 +127,7 @@ static void sink_request_rewind_cb(pa_sink *sink) {
     pa_assert_se(u = sink->userdata);
 
     if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) || !PA_SINK_INPUT_IS_LINKED(u->sink_input->thread_info.state)) {
-        pa_log_debug("JZ: %s[%d] sink or sink-input not linked, cannot rewind", __FILE__, __LINE__);
+        pa_log_warn("[%d]%s sink or sink-input not linked, cannot rewind", __LINE__, __func__);
         return;
     }
 
@@ -359,8 +359,8 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t ma
     pa_assert_se(u = sink_input->userdata);
 
     if (max_rewind == u->sink->thread_info.max_rewind) {
-        pa_log_warn("JZ: %s[%d]\n\t called without changing size.\n\tmax_rewind = %lu samples\n",
-                    __func__, __LINE__, max_rewind / u->sz_smp);
+        pa_log_warn("[%d]%s\n\t called without changing size.\n\tmax_rewind = %lu samples\n",
+                    __LINE__, __func__, max_rewind / u->sz_smp);
         pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
         pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
         return;
@@ -368,8 +368,8 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t ma
 
     if ( (max_rewind / u->sz_frm) < MIN_MAX_REWIND_FRAMES) {
         // This is an attempt to prevent excessive realloc shrinks and grows
-        pa_log_warn("JZ: %s[%d]\n\t called with too small size.\n\tmax_rewind = %lu samples\n",
-                    __func__, __LINE__, max_rewind / u->sz_smp);
+        pa_log_warn("[%d]%s\n\t called with too small size.\n\tmax_rewind = %lu samples\n",
+                    __LINE__, __func__, max_rewind / u->sz_smp);
         pa_memblockq_set_maxrewind(u->memblockq, MIN_MAX_REWIND_FRAMES * u->sz_frm);
         pa_sink_set_max_rewind_within_thread(u->sink, MIN_MAX_REWIND_FRAMES * u->sz_frm);
         return;
@@ -379,9 +379,9 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t ma
     if (max_rewind > u->sink->thread_info.max_rewind) {
         // convert to num samples
         growth = (max_rewind / u->sz_smp) - u->s1histbuf->length;
-        pa_log_debug("JZ: %s[%d] all in samples\n\tcur max_rewind = %12lu\n\treq max_rewind = %12lu\n"
+        pa_log_debug("[%d]%s all in samples\n\tcur max_rewind = %12lu\n\treq max_rewind = %12lu\n"
                      "\tgrowth =         %12lu\n\tidx =            %12lu\n\tlength =         %12lu\n",
-                     __func__, __LINE__, u->sink->thread_info.max_rewind / u->sz_smp, max_rewind / u->sz_smp, growth,
+                     __LINE__, __func__, u->sink->thread_info.max_rewind / u->sz_smp, max_rewind / u->sz_smp, growth,
                      u->s1histbuf->idx, u->s1histbuf->length);
         // stage 1
         u->s1histbuf->buffer = realloc(u->s1histbuf->buffer, (sizeof(biquad_data_element) * (u->s1histbuf->length + growth)));
@@ -406,13 +406,13 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t ma
         // convert to num samples
         shrinkage = (u->sink->thread_info.max_rewind - max_rewind) / u->sz_smp;
         // loop through and move everybody back by shrinkage
-        pa_log_debug("JZ: %s[%d] all in samples\n"
+        pa_log_debug("[%d]%s all in samples\n"
                 "\tcur max_rewind = %12lu\n"
                 "\treq max_rewind = %12lu\n"
                 "\tshrinkage =      %12lu\n"
                 "\tidx =            %12lu\n"
                 "\tlength =         %12lu\n",
-                __FILE__, __LINE__, u->sink->thread_info.max_rewind / u->sz_smp, max_rewind / u->sz_smp, shrinkage,
+                __LINE__, __func__, u->sink->thread_info.max_rewind / u->sz_smp, max_rewind / u->sz_smp, shrinkage,
                 u->s1histbuf->idx, u->s1histbuf->length);
 
         // stage 1
@@ -594,25 +594,27 @@ int pa__init(pa_module *module) {
     // get, validate and assign lowpass cutoff freq
     u->lpfreq = atof(pa_modargs_get_value(ma, "lpfreq", "100.0"));
     if (u->lpfreq < MIN_CUTOFF_FREQ) {
-        pa_log ("JZ: %s[%d] lpfreq must be between %f and %f.",
-                __FILE__, __LINE__, MIN_CUTOFF_FREQ, MAX_CUTOFF_FREQ);
+        pa_log_error("[%d]%s lpfreq must be between %f and %f.",
+                     __LINE__, __func__, MIN_CUTOFF_FREQ, MAX_CUTOFF_FREQ);
         u->lpfreq = MIN_CUTOFF_FREQ;
     }
     if (u->lpfreq > MAX_CUTOFF_FREQ) {
-        pa_log ("JZ: %s[%d] lpfreq must be between %f and %f.",
-                __FILE__, __LINE__, MIN_CUTOFF_FREQ, MAX_CUTOFF_FREQ);
+        pa_log_error("[%d]%s lpfreq must be between %f and %f.",
+                     __LINE__, __func__, MIN_CUTOFF_FREQ, MAX_CUTOFF_FREQ);
         u->lpfreq = MAX_CUTOFF_FREQ;
     }
-    pa_log_info("JZ: %s[%d] lpfreq=%f\n", __FILE__, __LINE__, u->lpfreq);
+    pa_log_info("[%d]%s lpfreq=%f\n", __LINE__, __func__, u->lpfreq);
 
     u->sample_spec = master->sample_spec;
     u->sample_spec.format = PA_SAMPLE_FLOAT32;
 
     map = master->channel_map;
+/*
     if (pa_modargs_get_sample_spec_and_channel_map(ma, &u->sample_spec, &map, PA_CHANNEL_MAP_DEFAULT) < 0) {
-        pa_log("Invalid sample format specification or channel map");
+        pa_log_error("Invalid sample format specification or channel map");
         goto fail;
     }
+*/
 
     /* setup filter_map
      * 'l' for lowpass, 'h' for highpass, 'a' allpass
@@ -620,7 +622,7 @@ int pa__init(pa_module *module) {
      * .*center --> high
      * .*left/right/aux -> allpass
      */
-    pa_log_info("JZ: %s[%d] filter_map=\n", __FILE__, __LINE__);
+    pa_log_info("\nfilter_map=\n");
     for (int i = 0; i < u->sample_spec.channels; i++) {
         switch (map.map[i]) {
             case PA_CHANNEL_POSITION_CENTER:
@@ -798,7 +800,7 @@ int pa__init(pa_module *module) {
     pa_sink_put(u->sink);
     pa_sink_input_put(u->sink_input);
     pa_modargs_free(ma);
-    pa_log_debug("JZ: %s[%d] finished lfe-lp.pa__init().\n", __FILE__, __LINE__);
+    pa_log_debug("Finished lfe-lp.pa__init().\n");
     return 0;
 
     fail: if (ma)
@@ -867,5 +869,5 @@ void pa__done(pa_module*m) {
         pa_memblockq_free(u->memblockq);
 
     pa_xfree(u);
-    pa_log_debug("JZ: %s[%d] All done. Bye from module-lfe-lp.", __FILE__, __LINE__);
+    pa_log_debug("All done. Bye from module-lfe-lowpass-sink.", __FILE__, __LINE__);
 }
