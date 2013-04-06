@@ -25,7 +25,7 @@
  */
 #include <biquad/biquad-filter.h>
 
-extern float filter_biquad(struct biquad_data *bqdt, struct biquad_factors bqfs, float *src) {
+float filter_biquad(struct biquad_data *bqdt, struct biquad_factors bqfs, float *src) {
     //#y0= (b0 * x0 + b1 * x1 + b2 * x2) − (a1 * y1 + a2 * y2);
     (*bqdt).w0 = (double)*src;
     (*bqdt).y0 = ((*bqdt).w0 * bqfs.b0 + (*bqdt).w1 * bqfs.b1 + (*bqdt).w2 * bqfs.b2) -
@@ -38,7 +38,7 @@ extern float filter_biquad(struct biquad_data *bqdt, struct biquad_factors bqfs,
 }
 
 
-extern void filter_calc_factors(biquad_factors *bqfs, double sample_rate, double cutoff_freq,
+void filter_calc_factors(biquad_factors *bqfs, double sample_rate, double cutoff_freq,
                                 char type, unsigned int stage, unsigned int num_stages) {
     double w0, alpha;
 
@@ -96,7 +96,7 @@ extern void filter_calc_factors(biquad_factors *bqfs, double sample_rate, double
 
 }
 
-extern void filter_init_bqdt(biquad_data *bqdt, size_t num_channels) {
+void filter_init_bqdt(biquad_data *bqdt, size_t num_channels) {
     size_t i;
 
     for (i = 0; i < num_channels; i++) {
@@ -105,7 +105,7 @@ extern void filter_init_bqdt(biquad_data *bqdt, size_t num_channels) {
     }
 }
 
-extern void filter_store_history(biquad_history *bqhist,
+void filter_store_history(biquad_history *bqhist,
                                  biquad_data_element *bqdtel) {
     (*bqhist).buffer[(*bqhist).idx] = *bqdtel;
     (*bqhist).idx += 1;

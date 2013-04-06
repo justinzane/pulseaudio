@@ -114,7 +114,7 @@ typedef struct biquad_history {
  * \note    y0= (b0 * w0 + b1 * w1 + b2 * w2) − (a1 * y1 + a2 * y2);
  * \see     http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
  */
-extern float filter_biquad(struct biquad_data *bqdt,
+float filter_biquad(struct biquad_data *bqdt,
                            struct biquad_factors bqfs,
                            float *src) __attribute__((optimize(3), hot));
 
@@ -170,7 +170,7 @@ const double LINKWITZ_RILEY_Q[4][4] = {{          0.5,     _SQRT_2_2,           
  *      Q0 of stage 4                           1.34
  *      dB/octave slope 12      24      36      48
  */
-extern void filter_calc_factors(biquad_factors *bqfs,
+void filter_calc_factors(biquad_factors *bqfs,
                                 double sample_rate,
                                 double cutoff_freq,
                                 char type,
@@ -182,7 +182,7 @@ extern void filter_calc_factors(biquad_factors *bqfs,
  * \param [in/out]  bqdt            biquad_data[num_channels]
  * \param [in]      num_channels
  */
-extern void filter_init_bqdt(biquad_data *bqdt,
+void filter_init_bqdt(biquad_data *bqdt,
                              size_t num_channels);
 
 /**
@@ -192,7 +192,7 @@ extern void filter_init_bqdt(biquad_data *bqdt,
  * \param [in/out]  bqhist  the history buffer
  * \param [in]      bqdtel  the data to be stored
  */
-extern void filter_store_history(biquad_history *bqhist,
+void filter_store_history(biquad_history *bqhist,
                                  biquad_data_element *bqdtel) __attribute__((optimize(3), hot));
 
 #endif /* BIQUAD_FILTER_H_ */
