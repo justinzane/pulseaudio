@@ -38,15 +38,12 @@ FREQS = [249]# 39, 79, 119, 249]
 
 COLORS = ["#7f0000", "#5f1f00", "#5f0f0f", "#7f001f", "#007f00", "#00007f"]
 
-SRC_FILE = "./stereo_20-20000Hz.wav"
+SRC_FILE = "stereo_1760-28-440.wav"  # "./stereo_20-20000Hz.wav"
 REC_FILE = "./output/test-%d.pcm"
 PLOT_FILE = "./output/test_plot.png"
 CONF_SRC_FILE = "./lfe-lp.pa"
 
-# PLAY_CMD = "../src/pacat -d alsa_output.pci-0000_00_1b.0.analog-stereo.lfe_lp " + SRC_FILE
-# REC_CMD = "../src/pacat -d alsa_output.pci-0000_00_1b.0.analog-stereo.monitor -r > " + REC_FILE
-
-PLAY_CMD = "../src/pacat -d null.lfe_lp " + SRC_FILE
+PLAY_CMD = "../src/pacat -d null.lfe_lowpass " + SRC_FILE
 REC_CMD = "../src/pacat --rate=%d --format=s16le --channels=%d " % (Fs, CHANS)
 REC_CMD += "--channel-map=\"front-left,front-right,rear-left,rear-right,front-center,lfe\" "
 REC_CMD += "-d null.monitor -r > " + REC_FILE
@@ -140,10 +137,10 @@ def analyze_test(f, ax):
 #                                        sampling=Fs,
 #                                        IP=15, NFFT='nextpow2'))
         nfft = pow(2, int(np.log2(test_data.transpose()[c].size)) + 1)
-        spectra.append(spectrum.Periodogram(data=test_data.transpose()[c],
-                                            sampling=Fs, window='kaiser',
-                                            NFFT=nfft, scale_by_freq=True,
-                                            detrend='none'))
+        spectra.append(spectrum.pdaniell(data=test_data.transpose()[c],
+                                         P=41, sampling=Fs, window='kaiser',
+                                         NFFT=nfft, scale_by_freq=False,
+                                         detrend='none'))
         spectra[c].run()
         spectra[c].plot(norm=True,
                         axes=ax,
@@ -167,7 +164,7 @@ def analyze_test(f, ax):
                    pad=2, labelsize='x-small')
     ax.grid(True, which='both', axis='both', color=[0.5, 0.5, 0.5, 0.5])
     ax.set_xscale("log")
-    ax.set_xlim(20, 20000)
+    ax.set_xlim(20, 2000)
     ax.set_ylim(-96, 0)
     leg = ax.legend(loc="lower center", ncol=CHANS / 2, prop=font1)
     leg.get_frame().set_alpha(0.25)
