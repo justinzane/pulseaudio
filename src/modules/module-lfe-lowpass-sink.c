@@ -24,11 +24,33 @@
     USA.
  */
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
+#include <stdio.h>
+#include <math.h>
+
+#include <pulse/gccmacro.h>
+#include <pulse/xmalloc.h>
+#include <pulse/def.h>
+
+#include <pulsecore/i18n.h>
+#include <pulsecore/namereg.h>
+#include <pulsecore/sink.h>
+#include <pulsecore/module.h>
+#include <pulsecore/core-util.h>
+#include <pulsecore/modargs.h>
+#include <pulsecore/log.h>
+#include <pulsecore/rtpoll.h>
+#include <pulsecore/sample-util.h>
+#include <pulsecore/ltdl-helper.h>
+
 #include <biquad/biquad-filter.h>
-#include "module-lfe-lp-symdef.h"
+#include "module-lfe-lowpass-sink-symdef.h"
 
 PA_MODULE_AUTHOR("Justin Chudgar");
-PA_MODULE_DESCRIPTION(_("LFE LP Filter"));
+PA_MODULE_DESCRIPTION(_("LFE Lowpass Filter Sink"));
 #ifndef PACKAGE_VERSION     /* Stop Eclipse from complaining */
 #define PACKAGE_VERSION ("0.0.0-bogus")
 #endif
@@ -55,15 +77,14 @@ struct userdata {
     pa_bool_t auto_desc;
     pa_sample_spec sample_spec;
     size_t sz_smp, sz_frm, sz_bqf;
-    double lpfreq;                                      /* corner/cutoff frequency, user defined */
-    struct biquad_factors *s1lpfs, *s1hpfs, *s1apfs;    /* lowpass, highpass and allpass coefficients */
-    struct biquad_factors *s2lpfs, *s2hpfs, *s2apfs;    /* lowpass, highpass and allpass coefficients */
-    struct biquad_data *s1lpdt, *s1hpdt, *s1apdt;       /* history data for the various filters stage 1*/
-    struct biquad_history *s1histbuf;                   /* rewind buffer for biquad_data stage 1*/
-    struct biquad_data *s2lpdt, *s2hpdt, *s2apdt;       /* history data for the various filters stage 2*/
-    struct biquad_history *s2histbuf;                   /* rewind buffer for biquad_data stage 2*/
-    char filter_map[PA_CHANNELS_MAX];              	    /* map of channels index to 'l','h' or 'a'
-                                                           to indicate filter type */
+    double lpfreq;                               /* corner/cutoff frequency, user defined */
+    biquad_factors *s1lpfs, *s1hpfs, *s1apfs;    /* lowpass, highpass and allpass coefficients */
+    biquad_factors *s2lpfs, *s2hpfs, *s2apfs;    /* lowpass, highpass and allpass coefficients */
+    biquad_data *s1lpdt, *s1hpdt, *s1apdt;       /* history data for the various filters stage 1*/
+    biquad_history *s1histbuf;                   /* rewind buffer for biquad_data stage 1*/
+    biquad_data *s2lpdt, *s2hpdt, *s2apdt;       /* history data for the various filters stage 2*/
+    biquad_history *s2histbuf;                   /* rewind buffer for biquad_data stage 2*/
+    biquad_types filter_map[PA_CHANNELS_MAX];    /* map of channels index to biquad_types */
 };
 
 static int sink_process_msg_cb(pa_msgobject *msgobject, int code, void *data, int64_t offset, pa_memchunk *chunk) {
@@ -180,39 +201,39 @@ __attribute__((optimize(3))) static int sink_input_pop_cb(pa_sink_input *sink_in
         for (chan_idx = 0; chan_idx < u->sample_spec.channels; chan_idx++) {
             cur_sample = cur_frame + chan_idx;
             dst_sample = dst_frame + chan_idx;
-            if (u->filter_map[chan_idx] == 'l') {
+            if (u->filter_map[chan_idx] == LOWPASS) {
                 // stage 1
-                lp = filter_biquad(& (u->s1lpdt[chan_idx]), * (u->s1lpfs), cur_sample);
+                lp = pa_biquad(& (u->s1lpdt[chan_idx]), * (u->s1lpfs), cur_sample);
                 bqdtel.w0 = u->s1lpdt[chan_idx].w0;
                 bqdtel.y0 = u->s1lpdt[chan_idx].y0;
-                filter_store_history(u->s1histbuf, &bqdtel);
+                pa_store_history(u->s1histbuf, &bqdtel);
                 // stage 2
-                *dst_sample = filter_biquad(& (u->s2lpdt[chan_idx]), * (u->s2lpfs), &lp);
+                *dst_sample = pa_biquad(& (u->s2lpdt[chan_idx]), * (u->s2lpfs), &lp);
                 bqdtel.w0 = u->s2lpdt[chan_idx].w0;
                 bqdtel.y0 = u->s2lpdt[chan_idx].y0;
-                filter_store_history(u->s2histbuf, &bqdtel);
-            } else if (u->filter_map[chan_idx] == 'h') {
+                pa_store_history(u->s2histbuf, &bqdtel);
+            } else if (u->filter_map[chan_idx] == HIGHPASS) {
                 // stage 1
-                hp = filter_biquad(& (u->s1hpdt[chan_idx]), * (u->s1hpfs), cur_sample);
+                hp = pa_biquad(& (u->s1hpdt[chan_idx]), * (u->s1hpfs), cur_sample);
                 bqdtel.w0 = u->s1hpdt[chan_idx].w0;
                 bqdtel.y0 = u->s1hpdt[chan_idx].y0;
-                filter_store_history(u->s1histbuf, &bqdtel);
+                pa_store_history(u->s1histbuf, &bqdtel);
                 // stage 2
-                *dst_sample = filter_biquad(& (u->s2hpdt[chan_idx]), * (u->s2hpfs), &hp);
+                *dst_sample = pa_biquad(& (u->s2hpdt[chan_idx]), * (u->s2hpfs), &hp);
                 bqdtel.w0 = u->s2hpdt[chan_idx].w0;
                 bqdtel.y0 = u->s2hpdt[chan_idx].y0;
-                filter_store_history(u->s2histbuf, &bqdtel);
-            } else if (u->filter_map[chan_idx] == 'a') {
+                pa_store_history(u->s2histbuf, &bqdtel);
+            } else if (u->filter_map[chan_idx] == ALLPASS) {
                 // stage 1
-                ap = filter_biquad(& (u->s1apdt[chan_idx]), * (u->s1apfs), cur_sample);
+                ap = pa_biquad(& (u->s1apdt[chan_idx]), * (u->s1apfs), cur_sample);
                 bqdtel.w0 = u->s1apdt[chan_idx].w0;
                 bqdtel.y0 = u->s1apdt[chan_idx].y0;
-                filter_store_history(u->s1histbuf, &bqdtel);
+                pa_store_history(u->s1histbuf, &bqdtel);
                 // stage 2
-                *dst_sample = filter_biquad(& (u->s2apdt[chan_idx]), * (u->s2apfs), &ap);
+                *dst_sample = pa_biquad(& (u->s2apdt[chan_idx]), * (u->s2apfs), &ap);
                 bqdtel.w0 = u->s2apdt[chan_idx].w0;
                 bqdtel.y0 = u->s2apdt[chan_idx].y0;
-                filter_store_history(u->s2histbuf, &bqdtel);
+                pa_store_history(u->s2histbuf, &bqdtel);
             } else {
                 pa_log_error("Should never get here, even in Jersey.");
             }
@@ -265,7 +286,7 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input, size_t rewin
             frame_size = u->sample_spec.channels * sizeof(biquad_data_element);
             for (i = 0; i < u->sample_spec.channels; i++) {
                 switch (u->filter_map[i]) {
-                    case 'l': {
+                    case LOWPASS: {
                         // stage 1
                         u->s1lpdt[i].w2 = u->s1histbuf->buffer[i].w0;
                         u->s1lpdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
@@ -282,7 +303,7 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input, size_t rewin
                         u->s2lpdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
                         break;
                     }
-                    case 'h': {
+                    case HIGHPASS: {
                         // stage 1
                         u->s1hpdt[i].w2 = u->s1histbuf->buffer[i].w0;
                         u->s1hpdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
@@ -299,7 +320,7 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input, size_t rewin
                         u->s2hpdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
                         break;
                     }
-                    case 'a': {
+                    case ALLPASS: {
                         // stage 1
                         u->s1apdt[i].w2 = u->s1histbuf->buffer[i].w0;
                         u->s1apdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
@@ -609,18 +630,18 @@ int pa__init(pa_module *module) {
             case PA_CHANNEL_POSITION_TOP_CENTER:
             case PA_CHANNEL_POSITION_TOP_FRONT_CENTER:
             case PA_CHANNEL_POSITION_TOP_REAR_CENTER:
-                u->filter_map[i] = 'h';
+                u->filter_map[i] = HIGHPASS;
                 break;
             case PA_CHANNEL_POSITION_LFE:
-                u->filter_map[i] = 'l';
+                u->filter_map[i] = LOWPASS;
                 break;
             default:
-                u->filter_map[i] = 'a';
+                u->filter_map[i] = ALLPASS;
         }
         pa_log_info("\t%d %c\n", i, u->filter_map[i]);
     }
 
-        u->module = module;
+    u->module = module;
     module->userdata = u;
 
     /* Create sink */
@@ -628,7 +649,7 @@ int pa__init(pa_module *module) {
     sink_data.driver = __FILE__;
     sink_data.module = module;
     if (! (sink_data.name = pa_xstrdup(pa_modargs_get_value(ma, "sink_name", NULL )))) {
-        sink_data.name = pa_sprintf_malloc("%s.lfe_lp", master->name);
+        sink_data.name = pa_sprintf_malloc("%s.lfe_lowpass", master->name);
     }
     pa_sink_new_data_set_sample_spec(&sink_data, &u->sample_spec);
     pa_sink_new_data_set_channel_map(&sink_data, &map);
@@ -645,14 +666,10 @@ int pa__init(pa_module *module) {
     if ( (u->auto_desc = !pa_proplist_contains(sink_data.proplist, PA_PROP_DEVICE_DESCRIPTION))) {
         const char *z;
         z = pa_proplist_gets(master->proplist, PA_PROP_DEVICE_DESCRIPTION);
-        pa_proplist_setf(sink_data.proplist, PA_PROP_DEVICE_DESCRIPTION, "lfe_lp %s on %s", sink_data.name,
+        pa_proplist_setf(sink_data.proplist, PA_PROP_DEVICE_DESCRIPTION, "%s on %s", sink_data.name,
                          z ? z : master->name);
     }
 
-// here to make Eclipse CDT stop whining
-#ifndef PA_SINK_SHARE_VOLUME_WITH_MASTER
-#define PA_SINK_SHARE_VOLUME_WITH_MASTER 0x1000000U
-#endif
     u->sink = pa_sink_new(
             module->core,
             &sink_data,
@@ -764,19 +781,19 @@ int pa__init(pa_module *module) {
     u->s2histbuf->buffer = NULL;
 
     // init filter data
-    filter_calc_factors(u->s1apfs, u->sink->sample_spec.rate, u->lpfreq, 'a', 1, 2);
-    filter_calc_factors(u->s1hpfs, u->sink->sample_spec.rate, u->lpfreq, 'h', 1, 2);
-    filter_calc_factors(u->s1lpfs, u->sink->sample_spec.rate, u->lpfreq, 'l', 1, 2);
-    filter_calc_factors(u->s2apfs, u->sink->sample_spec.rate, u->lpfreq, 'a', 2, 2);
-    filter_calc_factors(u->s2hpfs, u->sink->sample_spec.rate, u->lpfreq, 'h', 2, 2);
-    filter_calc_factors(u->s2lpfs, u->sink->sample_spec.rate, u->lpfreq, 'l', 2, 2);
+    pa_calc_factors(u->s1apfs, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 1, 2);
+    pa_calc_factors(u->s1hpfs, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 1, 2);
+    pa_calc_factors(u->s1lpfs, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 1, 2);
+    pa_calc_factors(u->s2apfs, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 2, 2);
+    pa_calc_factors(u->s2hpfs, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 2, 2);
+    pa_calc_factors(u->s2lpfs, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 2, 2);
 
-    filter_init_bqdt(u->s1apdt, u->sample_spec.channels);
-    filter_init_bqdt(u->s1hpdt, u->sample_spec.channels);
-    filter_init_bqdt(u->s1lpdt, u->sample_spec.channels);
-    filter_init_bqdt(u->s2apdt, u->sample_spec.channels);
-    filter_init_bqdt(u->s2hpdt, u->sample_spec.channels);
-    filter_init_bqdt(u->s2lpdt, u->sample_spec.channels);
+    pa_init_bqdt(u->s1apdt, u->sample_spec.channels);
+    pa_init_bqdt(u->s1hpdt, u->sample_spec.channels);
+    pa_init_bqdt(u->s1lpdt, u->sample_spec.channels);
+    pa_init_bqdt(u->s2apdt, u->sample_spec.channels);
+    pa_init_bqdt(u->s2hpdt, u->sample_spec.channels);
+    pa_init_bqdt(u->s2lpdt, u->sample_spec.channels);
 
     pa_sink_put(u->sink);
     pa_sink_input_put(u->sink_input);

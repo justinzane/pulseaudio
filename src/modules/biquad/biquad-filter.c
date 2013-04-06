@@ -25,7 +25,7 @@
  */
 #include <biquad/biquad-filter.h>
 
-float filter_biquad(struct biquad_data *bqdt, struct biquad_factors bqfs, float *src) {
+float pa_biquad(struct biquad_data *bqdt, struct biquad_factors bqfs, float *src) {
     //#y0= (b0 * x0 + b1 * x1 + b2 * x2) − (a1 * y1 + a2 * y2);
     (*bqdt).w0 = (double)*src;
     (*bqdt).y0 = ((*bqdt).w0 * bqfs.b0 + (*bqdt).w1 * bqfs.b1 + (*bqdt).w2 * bqfs.b2) -
@@ -38,9 +38,18 @@ float filter_biquad(struct biquad_data *bqdt, struct biquad_factors bqfs, float 
 }
 
 
-void filter_calc_factors(biquad_factors *bqfs, double sample_rate, double cutoff_freq,
+void pa_calc_factors(biquad_factors *bqfs, double sample_rate, double cutoff_freq,
                                 char type, unsigned int stage, unsigned int num_stages) {
     double w0, alpha;
+
+    /* \see http://www.linkwitzlab.com/filters.htm */
+    #define _SQRT_2_2       0.70710678118654757273731092936941422522068023681640625
+    #define _SQRT_11875_2   0.54486236794258424698256249030237086117267608642578125
+    #define _SQRT_71875_2   1.3404756618454509720095302327536046504974365234375
+    const double _LINKWITZ_RILEY_Q_1[4] = {          0.5,     _SQRT_2_2,           0.5, _SQRT_11875_2};
+    const double _LINKWITZ_RILEY_Q_2[4] = {    _SQRT_2_2,     _SQRT_2_2,           1.0, _SQRT_71875_2};
+    const double _LINKWITZ_RILEY_Q_3[4] = {          0.5,           1.0,           1.0, _SQRT_11875_2};
+    const double _LINKWITZ_RILEY_Q_4[4] = {_SQRT_11875_2, _SQRT_71875_2, _SQRT_11875_2, _SQRT_71875_2};
 
     /* TODO: validate input args */
     pa_assert(bqfs);
@@ -49,10 +58,25 @@ void filter_calc_factors(biquad_factors *bqfs, double sample_rate, double cutoff
     pa_assert(stage > 0);
 
     w0 = 2.0 * M_PI * cutoff_freq / sample_rate;
-    alpha = sin(w0) / (2.0 * LINKWITZ_RILEY_Q[num_stages-1][stage-1]);
+    switch (num_stages) {
+        case 1:
+            alpha = sin(w0) / (2.0 * _LINKWITZ_RILEY_Q_1[stage-1]);
+            break;
+        case 2:
+            alpha = sin(w0) / (2.0 * _LINKWITZ_RILEY_Q_2[stage-1]);
+            break;
+        case 3:
+            alpha = sin(w0) / (2.0 * _LINKWITZ_RILEY_Q_3[stage-1]);
+            break;
+        case 4:
+            alpha = sin(w0) / (2.0 * _LINKWITZ_RILEY_Q_4[stage-1]);
+            break;
+        default:
+            pa_log_error("Invalid value for num_stages.");
+    }
 
     switch(type) {
-        case 'a': {
+        case ALLPASS: {
             (*bqfs).a0 = (1.0 + alpha);
             (*bqfs).a1 = (-2.0 * cos(w0)) / (*bqfs).a0;
             (*bqfs).a2 = (1.0 - alpha) / (*bqfs).a0;
@@ -62,7 +86,7 @@ void filter_calc_factors(biquad_factors *bqfs, double sample_rate, double cutoff
             (*bqfs).a0 = 1.0;
             break;
         }
-        case 'h': {
+        case HIGHPASS: {
             (*bqfs).a0 = (1.0 + alpha);
             (*bqfs).a1 = (-2.0 * cos(w0)) / (*bqfs).a0;
             (*bqfs).a2 = (1.0 - alpha) / (*bqfs).a0;
@@ -72,7 +96,7 @@ void filter_calc_factors(biquad_factors *bqfs, double sample_rate, double cutoff
             (*bqfs).a0 = 1.0;
             break;
         }
-        case 'l': {
+        case LOWPASS: {
             (*bqfs).a0 = (1.0 + alpha);
             (*bqfs).a1 = (-2.0 * cos(w0)) / (*bqfs).a0;
             (*bqfs).a2 = (1.0 - alpha) / (*bqfs).a0;
@@ -83,8 +107,7 @@ void filter_calc_factors(biquad_factors *bqfs, double sample_rate, double cutoff
             break;
         }
         default: {
-            pa_log("%d:%s:\n\tInvalid type, %c,  specified. Must be \'a\',\'h\' or \'l\'.",
-                   __LINE__, __func__, type);
+            pa_log("%d:%s:\n\tInvalid type, %c, specified.", __LINE__, __func__, type);
             return;
         }
     }
@@ -96,7 +119,7 @@ void filter_calc_factors(biquad_factors *bqfs, double sample_rate, double cutoff
 
 }
 
-void filter_init_bqdt(biquad_data *bqdt, size_t num_channels) {
+void pa_init_bqdt(biquad_data *bqdt, size_t num_channels) {
     size_t i;
 
     for (i = 0; i < num_channels; i++) {
@@ -105,7 +128,7 @@ void filter_init_bqdt(biquad_data *bqdt, size_t num_channels) {
     }
 }
 
-void filter_store_history(biquad_history *bqhist,
+void pa_store_history(biquad_history *bqhist,
                                  biquad_data_element *bqdtel) {
     (*bqhist).buffer[(*bqhist).idx] = *bqdtel;
     (*bqhist).idx += 1;

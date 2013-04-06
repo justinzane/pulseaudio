@@ -1607,7 +1607,8 @@ module_ladspa_sink_la_CFLAGS += $(DBUS_CFLAGS)
 module_ladspa_sink_la_LIBADD += $(DBUS_LIBS)
 endif
 
-module_lfe_lowpass_sink_la_SOURCES = modules/module-lfe-lowpass-sink.c modules/biquad/biquad-filter.c modules/biquad/biquad-filter.h
+module_lfe_lowpass_sink_la_SOURCES = modules/module-lfe-lowpass-sink.c \
+		modules/biquad/biquad-filter.c modules/biquad/biquad-filter.h
 module_lfe_lowpass_sink_la_LDFLAGS = $(MODULE_LDFLAGS)
 module_lfe_lowpass_sink_la_LIBADD = $(MODULE_LIBADD) $(LIBLTDL)
 
@@ -2043,7 +2044,7 @@ module_rygel_media_server_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS)
 ###################################
 #        Some minor stuff         #
 ###################################
-
+ 
 CLEANFILES += daemon/pulseaudio.desktop daemon/pulseaudio-kde.desktop
 DISTCLEANFILES = esdcompat client.conf default.pa system.pa daemon.conf start-pulseaudio-x11 start-pulseaudio-kde
 

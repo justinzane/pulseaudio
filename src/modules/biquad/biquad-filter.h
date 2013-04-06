@@ -30,27 +30,27 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
-
+//
 #include <stdio.h>
 #include <math.h>
-#include <time.h>
-#include <float.h>
-#include <xmmintrin.h>
-
-#include <pulse/gccmacro.h>
-#include <pulse/xmalloc.h>
-#include <pulse/def.h>
-
-#include <pulsecore/i18n.h>
-#include <pulsecore/namereg.h>
-#include <pulsecore/sink.h>
-#include <pulsecore/module.h>
+//#include <time.h>
+//#include <float.h>
+//#include <xmmintrin.h>
+//
+//#include <pulse/gccmacro.h>
+//#include <pulse/xmalloc.h>
+//#include <pulse/def.h>
+//
+//#include <pulsecore/i18n.h>
+//#include <pulsecore/namereg.h>
+//#include <pulsecore/sink.h>
+//#include <pulsecore/module.h>
 #include <pulsecore/core-util.h>
-#include <pulsecore/modargs.h>
-#include <pulsecore/log.h>
-#include <pulsecore/rtpoll.h>
-#include <pulsecore/sample-util.h>
-#include <pulsecore/ltdl-helper.h>
+//#include <pulsecore/modargs.h>
+//#include <pulsecore/log.h>
+//#include <pulsecore/rtpoll.h>
+//#include <pulsecore/sample-util.h>
+//#include <pulsecore/ltdl-helper.h>
 
 #define MEMBLOCKQ_MAXLENGTH (16*1024*1024)
 #define MIN_CUTOFF_FREQ 20.0
@@ -61,9 +61,9 @@
  * \note allpass, highpass and lowpass are currently implemented.
  */
 typedef enum biquad_types {
-    LOWPASS, //!< LOWPASS
-    HIGHPASS,//!< HIGHPASS
-    ALLPASS  //!< ALLPASS
+    LOWPASS,    //!< LOWPASS
+    HIGHPASS,   //!< HIGHPASS
+    ALLPASS     //!< ALLPASS
 } biquad_types;
 
 /**
@@ -106,7 +106,7 @@ typedef struct biquad_history {
 } biquad_history;
 
 /**
- * \fn      filter_biquad
+ * \fn      pa_biquad
  * \param   [in/out]  bqdt    the filter's working data
  * \param   [in]      bqfs    the coefficients
  * \param   [in]      src     the source sample
@@ -114,22 +114,12 @@ typedef struct biquad_history {
  * \note    y0= (b0 * w0 + b1 * w1 + b2 * w2) − (a1 * y1 + a2 * y2);
  * \see     http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
  */
-float filter_biquad(struct biquad_data *bqdt,
+float pa_biquad(struct biquad_data *bqdt,
                            struct biquad_factors bqfs,
                            float *src) __attribute__((optimize(3), hot));
 
-/* See below for explanation. */
-#define _SQRT_2_2       0.70710678118654757273731092936941422522068023681640625
-#define _SQRT_11875_2   0.54486236794258424698256249030237086117267608642578125
-#define _SQRT_71875_2   1.3404756618454509720095302327536046504974365234375
-const double LINKWITZ_RILEY_Q[4][4] = {{          0.5,     _SQRT_2_2,           0.5, _SQRT_11875_2},
-                                       {    _SQRT_2_2,     _SQRT_2_2,           1.0, _SQRT_71875_2},
-                                       {          0.5,           1.0,           1.0, _SQRT_11875_2},
-                                       {_SQRT_11875_2, _SQRT_71875_2, _SQRT_11875_2, _SQRT_71875_2}};
-
-
 /**
- * \fn                          filter_calc_factors
+ * \fn                          pa_calc_factors
  * \param   [in]    sample_rate in Hz
  * \param   [in]    cutoff_freq in Hz, also called corner freq.
  * \param   [in]    type        'a' for allpass,
@@ -162,37 +152,30 @@ const double LINKWITZ_RILEY_Q[4][4] = {{          0.5,     _SQRT_2_2,           
  *               b1 =  -2*cos(w0)
  *               b2 =   1 + alpha
  * All coefficients are normalized by dividing by the respective a0.
- * \see http://www.linkwitzlab.com/filters.htm
- *                      LR2     LR4     LR6     LR8
- *      Q0 of stage 1   0.5     0.71    0.5     0.54
- *      Q0 of stage 2           0.71    1.0     1.34
- *      Q0 of stage 3                   1.0     0.54
- *      Q0 of stage 4                           1.34
- *      dB/octave slope 12      24      36      48
  */
-void filter_calc_factors(biquad_factors *bqfs,
+void pa_calc_factors(biquad_factors *bqfs,
                                 double sample_rate,
                                 double cutoff_freq,
                                 char type,
                                 unsigned int stage,
                                 unsigned int num_stages);
 /**
- * \fn      filter_init_bqdt
+ * \fn      pa_init_bqdt
  * \brief   set data elements to 0.0
  * \param [in/out]  bqdt            biquad_data[num_channels]
  * \param [in]      num_channels
  */
-void filter_init_bqdt(biquad_data *bqdt,
+void pa_init_bqdt(biquad_data *bqdt,
                              size_t num_channels);
 
 /**
- * \fn      filter_store_history
+ * \fn      pa_store_history
  * \brief   store the most recent biquad element, [w0, y0], in the history buffer so that we
  *          can rewind without audio inconsistencies by restoring the filter data.
  * \param [in/out]  bqhist  the history buffer
  * \param [in]      bqdtel  the data to be stored
  */
-void filter_store_history(biquad_history *bqhist,
+void pa_store_history(biquad_history *bqhist,
                                  biquad_data_element *bqdtel) __attribute__((optimize(3), hot));
 
 #endif /* BIQUAD_FILTER_H_ */
