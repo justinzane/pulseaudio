@@ -1,47 +1,48 @@
-/***
- This file is part of PulseAudio.
+/**
+ * \file        module-lfe-lp.c
+ * \date        Apr 2, 2013
+ * \author      Justin Chudgar, justin@justinzane.com
+ * \copyright   Justin Chudgar
+ * \license     GPLv3
+    This file is part of PulseAudio.
 
- Copyright 2013 Justin Chudgar <justin@justinzane.com>
+    Copyright 2013 Justin Chudgar <justin@justinzane.com>
 
- PulseAudio is free software; you can redistribute it and/or modify
- it under the terms of the GNU Lesser General Public License as published
- by the Free Software Foundation; either version 2.1 of the License,
- or (at your option) any later version.
+    PulseAudio is free software; you can redistribute it and/or modify
+    it under the terms of the GNU Lesser General Public License as published
+    by the Free Software Foundation; either version 2.1 of the License,
+    or (at your option) any later version.
 
- PulseAudio is distributed in the hope that it will be useful, but
- WITHOUT ANY WARRANTY; without even the implied warranty of
- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- General Public License for more details.
+    PulseAudio is distributed in the hope that it will be useful, but
+    WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+    General Public License for more details.
 
- You should have received a copy of the GNU Lesser General Public License
- along with PulseAudio; if not, write to the Free Software
- Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
- USA.
- ***/
+    You should have received a copy of the GNU Lesser General Public License
+    along with PulseAudio; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+    USA.
+ */
 
 #include <biquad/biquad-filter.h>
 #include "module-lfe-lp-symdef.h"
 
-PA_MODULE_AUTHOR(_("Justin Chudgar"));
+PA_MODULE_AUTHOR("Justin Chudgar");
 PA_MODULE_DESCRIPTION(_("LFE LP Filter"));
 #ifndef PACKAGE_VERSION     /* Stop Eclipse from complaining */
-#define PACKAGE_VERSION ( _("0.0.0-bogus"))
+#define PACKAGE_VERSION ("0.0.0-bogus")
 #endif
 PA_MODULE_VERSION(PACKAGE_VERSION);
 PA_MODULE_LOAD_ONCE(FALSE);
 PA_MODULE_USAGE(_("sink_name=<name for the sink> "
                   "sink_properties=<properties for the sink> "
                   "master=<name of sink to filter> "
-                  "lpfreq=low pass cutoff freq 20-500 Hz"
-                  "use_volume_sharing=<yes or no> "
-                  "force_flat_volume=<yes or no> " ));
+                  "lpfreq=low pass cutoff freq 20-500 Hz"));
 
 static const char* const valid_modargs[] = {"sink_name",
                                             "sink_properties",
                                             "master",
                                             "lpfreq",
-                                            "use_volume_sharing",
-                                            "force_flat_volume",
                                             NULL };
 
 /* persistent user data structure */
@@ -54,14 +55,15 @@ struct userdata {
     pa_bool_t auto_desc;
     pa_sample_spec sample_spec;
     size_t sz_smp, sz_frm, sz_bqf;
-    double lpfreq;                                 /* corner/cutoff frequency, user defined */
-    struct biquad_factors *lpfs, *hpfs, *apfs;     /* lowpass, highpass and allpass coefficients */
-    struct biquad_data *s1lpdt, *s1hpdt, *s1apdt;  /* history data for the various filters stage 1*/
-    struct biquad_history *s1histbuf;              /* rewind buffer for biquad_data stage 1*/
-    struct biquad_data *s2lpdt, *s2hpdt, *s2apdt;  /* history data for the various filters stage 1*/
-    struct biquad_history *s2histbuf;              /* rewind buffer for biquad_data stage 2*/
-    char filter_map[PA_CHANNELS_MAX];              /* map of channels index to 'l','h' or 'a'
-                                                      to indicate filter type */
+    double lpfreq;                                      /* corner/cutoff frequency, user defined */
+    struct biquad_factors *s1lpfs, *s1hpfs, *s1apfs;    /* lowpass, highpass and allpass coefficients */
+    struct biquad_factors *s2lpfs, *s2hpfs, *s2apfs;    /* lowpass, highpass and allpass coefficients */
+    struct biquad_data *s1lpdt, *s1hpdt, *s1apdt;       /* history data for the various filters stage 1*/
+    struct biquad_history *s1histbuf;                   /* rewind buffer for biquad_data stage 1*/
+    struct biquad_data *s2lpdt, *s2hpdt, *s2apdt;       /* history data for the various filters stage 2*/
+    struct biquad_history *s2histbuf;                   /* rewind buffer for biquad_data stage 2*/
+    char filter_map[PA_CHANNELS_MAX];              	    /* map of channels index to 'l','h' or 'a'
+                                                           to indicate filter type */
 };
 
 static int sink_process_msg_cb(pa_msgobject *msgobject, int code, void *data, int64_t offset, pa_memchunk *chunk) {
@@ -74,16 +76,16 @@ static int sink_process_msg_cb(pa_msgobject *msgobject, int code, void *data, in
              * shut down, the sink second. */
             if (!PA_SINK_IS_LINKED(u->sink->thread_info.state) || !PA_SINK_INPUT_IS_LINKED(u->sink_input->thread_info.state)) {
                 * ((pa_usec_t*)data) = 0;
-                return (0);
+                return 0;
             }
             /* Get the latency of the master sink and add the latency internal
              to our sink input on top */
             * ((pa_usec_t*)data) = pa_sink_get_latency_within_thread(u->sink_input->sink)
                     + pa_bytes_to_usec(pa_memblockq_get_length(u->sink_input->thread_info.render_memblockq),
                                        &u->sink_input->sink->sample_spec);
-            return (0);
+            return 0;
     }
-    return (pa_sink_process_msg(msgobject, code, data, offset, chunk));
+    return pa_sink_process_msg(msgobject, code, data, offset, chunk);
 }
 
 static int sink_set_state_cb(pa_sink *sink, pa_sink_state_t state) {
@@ -92,10 +94,10 @@ static int sink_set_state_cb(pa_sink *sink, pa_sink_state_t state) {
     pa_assert_se(u = sink->userdata);
 
     if (!PA_SINK_IS_LINKED(state) || !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
-        return (0);
+        return 0;
 
     pa_sink_input_cork(u->sink_input, state == PA_SINK_SUSPENDED);
-    return (0);
+    return 0;
 }
 
 static void sink_request_rewind_cb(pa_sink *sink) {
@@ -206,42 +208,40 @@ __attribute__((optimize(3))) static int sink_input_pop_cb(pa_sink_input *sink_in
             dst_sample = dst_frame + chan_idx;
             if (u->filter_map[chan_idx] == 'l') {
                 // stage 1
-                lp = filter_biquad(& (u->s1lpdt[chan_idx]), * (u->lpfs), cur_sample);
+                lp = filter_biquad(& (u->s1lpdt[chan_idx]), * (u->s1lpfs), cur_sample);
                 bqdtel.w0 = u->s1lpdt[chan_idx].w0;
                 bqdtel.y0 = u->s1lpdt[chan_idx].y0;
                 filter_store_history(u->s1histbuf, &bqdtel);
                 // stage 2
-                *dst_sample = filter_biquad(& (u->s2lpdt[chan_idx]), * (u->lpfs), &lp);
+                *dst_sample = filter_biquad(& (u->s2lpdt[chan_idx]), * (u->s2lpfs), &lp);
                 bqdtel.w0 = u->s2lpdt[chan_idx].w0;
                 bqdtel.y0 = u->s2lpdt[chan_idx].y0;
                 filter_store_history(u->s2histbuf, &bqdtel);
-            } else
-                if (u->filter_map[chan_idx] == 'h') {
-                    // stage 1
-                    hp = filter_biquad(& (u->s1hpdt[chan_idx]), * (u->hpfs), cur_sample);
-                    bqdtel.w0 = u->s1hpdt[chan_idx].w0;
-                    bqdtel.y0 = u->s1hpdt[chan_idx].y0;
-                    filter_store_history(u->s1histbuf, &bqdtel);
-                    // stage 2
-                    *dst_sample = filter_biquad(& (u->s2hpdt[chan_idx]), * (u->hpfs), &hp);
-                    bqdtel.w0 = u->s2hpdt[chan_idx].w0;
-                    bqdtel.y0 = u->s2hpdt[chan_idx].y0;
-                    filter_store_history(u->s2histbuf, &bqdtel);
-                } else
-                    if (u->filter_map[chan_idx] == 'a') {
-                        // stage 1
-                        ap = filter_biquad(& (u->s1apdt[chan_idx]), * (u->apfs), cur_sample);
-                        bqdtel.w0 = u->s1apdt[chan_idx].w0;
-                        bqdtel.y0 = u->s1apdt[chan_idx].y0;
-                        filter_store_history(u->s1histbuf, &bqdtel);
-                        // stage 2
-                        *dst_sample = filter_biquad(& (u->s2apdt[chan_idx]), * (u->apfs), &ap);
-                        bqdtel.w0 = u->s2apdt[chan_idx].w0;
-                        bqdtel.y0 = u->s2apdt[chan_idx].y0;
-                        filter_store_history(u->s2histbuf, &bqdtel);
-                    } else {
-                        pa_log_error("Should never get here, even in Jersey.");
-                    }
+            } else if (u->filter_map[chan_idx] == 'h') {
+                // stage 1
+                hp = filter_biquad(& (u->s1hpdt[chan_idx]), * (u->s1hpfs), cur_sample);
+                bqdtel.w0 = u->s1hpdt[chan_idx].w0;
+                bqdtel.y0 = u->s1hpdt[chan_idx].y0;
+                filter_store_history(u->s1histbuf, &bqdtel);
+                // stage 2
+                *dst_sample = filter_biquad(& (u->s2hpdt[chan_idx]), * (u->s2hpfs), &hp);
+                bqdtel.w0 = u->s2hpdt[chan_idx].w0;
+                bqdtel.y0 = u->s2hpdt[chan_idx].y0;
+                filter_store_history(u->s2histbuf, &bqdtel);
+            } else if (u->filter_map[chan_idx] == 'a') {
+                // stage 1
+                ap = filter_biquad(& (u->s1apdt[chan_idx]), * (u->s1apfs), cur_sample);
+                bqdtel.w0 = u->s1apdt[chan_idx].w0;
+                bqdtel.y0 = u->s1apdt[chan_idx].y0;
+                filter_store_history(u->s1histbuf, &bqdtel);
+                // stage 2
+                *dst_sample = filter_biquad(& (u->s2apdt[chan_idx]), * (u->s2apfs), &ap);
+                bqdtel.w0 = u->s2apdt[chan_idx].w0;
+                bqdtel.y0 = u->s2apdt[chan_idx].y0;
+                filter_store_history(u->s2histbuf, &bqdtel);
+            } else {
+                pa_log_error("Should never get here, even in Jersey.");
+            }
         }
     }
 
@@ -250,7 +250,7 @@ __attribute__((optimize(3))) static int sink_input_pop_cb(pa_sink_input *sink_in
 
     pa_memblock_unref(tchunk.memblock);
 
-    return (0);
+    return 0;
 }
 
 /* Callback function used called from the IO thread context. Causes the sink to
@@ -593,8 +593,6 @@ int pa__init(pa_module *module) {
     pa_sink *master = NULL;
     pa_sink_input_new_data sink_input_data;
     pa_sink_new_data sink_data;
-    pa_bool_t use_volume_sharing = TRUE;
-    pa_bool_t force_flat_volume = FALSE;
     pa_memchunk silence;
 
     pa_assert(module);
@@ -662,22 +660,7 @@ int pa__init(pa_module *module) {
         pa_log_info("\t%d %c\n", i, u->filter_map[i]);
     }
 
-    if (pa_modargs_get_value_boolean(ma, "use_volume_sharing", &use_volume_sharing) < 0) {
-        pa_log("use_volume_sharing= expects a boolean argument");
-        goto fail;
-    }
-
-    if (pa_modargs_get_value_boolean(ma, "force_flat_volume", &force_flat_volume) < 0) {
-        pa_log("force_flat_volume= expects a boolean argument");
-        goto fail;
-    }
-
-    if (use_volume_sharing && force_flat_volume) {
-        pa_log("Flat volume can't be forced when using volume sharing.");
-        goto fail;
-    }
-
-    u->module = module;
+        u->module = module;
     module->userdata = u;
 
     /* Create sink */
@@ -726,14 +709,6 @@ int pa__init(pa_module *module) {
     u->sink->set_state = sink_set_state_cb;
     u->sink->update_requested_latency = sink_update_requested_latency_cb;
     u->sink->request_rewind = sink_request_rewind_cb;
-    pa_sink_set_set_mute_callback(u->sink, sink_set_mute_cb);
-    if (!use_volume_sharing) {
-        pa_sink_set_set_volume_callback(u->sink, sink_set_volume_cb);
-        pa_sink_enable_decibel_volume(u->sink, TRUE );
-    }
-    /* Normally this flag would be enabled automatically be we can force it. */
-    if (force_flat_volume)
-        u->sink->flags |= PA_SINK_FLAT_VOLUME;
     u->sink->userdata = u;
 
     pa_sink_set_asyncmsgq(u->sink, master->asyncmsgq);
@@ -793,9 +768,12 @@ int pa__init(pa_module *module) {
     u->sz_frm = u->sz_smp * u->sample_spec.channels;
 
     // alloc filter factors
-    u->lpfs = malloc(u->sz_bqf);
-    u->hpfs = malloc(u->sz_bqf);
-    u->apfs = malloc(u->sz_bqf);
+    u->s1lpfs = malloc(u->sz_bqf);
+    u->s1hpfs = malloc(u->sz_bqf);
+    u->s1apfs = malloc(u->sz_bqf);
+    u->s2lpfs = malloc(u->sz_bqf);
+    u->s2hpfs = malloc(u->sz_bqf);
+    u->s2apfs = malloc(u->sz_bqf);
 
     // alloc stage 1&2 biquad data
     u->s1lpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
@@ -827,9 +805,12 @@ int pa__init(pa_module *module) {
     u->s2histbuf->buffer = NULL;
 
     // init filter data
-    filter_calc_factors(u->apfs, u->sink->sample_spec.rate, u->lpfreq, 'a', 1);
-    filter_calc_factors(u->hpfs, u->sink->sample_spec.rate, u->lpfreq, 'h', 1);
-    filter_calc_factors(u->lpfs, u->sink->sample_spec.rate, u->lpfreq, 'l', 1);
+    filter_calc_factors(u->s1apfs, u->sink->sample_spec.rate, u->lpfreq, 'a', 1, 2);
+    filter_calc_factors(u->s1hpfs, u->sink->sample_spec.rate, u->lpfreq, 'h', 1, 2);
+    filter_calc_factors(u->s1lpfs, u->sink->sample_spec.rate, u->lpfreq, 'l', 1, 2);
+    filter_calc_factors(u->s2apfs, u->sink->sample_spec.rate, u->lpfreq, 'a', 2, 2);
+    filter_calc_factors(u->s2hpfs, u->sink->sample_spec.rate, u->lpfreq, 'h', 2, 2);
+    filter_calc_factors(u->s2lpfs, u->sink->sample_spec.rate, u->lpfreq, 'l', 2, 2);
 
     filter_init_bqdt(u->s1apdt, u->sample_spec.channels);
     filter_init_bqdt(u->s1hpdt, u->sample_spec.channels);
@@ -842,19 +823,19 @@ int pa__init(pa_module *module) {
     pa_sink_input_put(u->sink_input);
     pa_modargs_free(ma);
     pa_log_debug("JZ: %s[%d] finished lfe-lp.pa__init().\n", __FILE__, __LINE__);
-    return (0);
+    return 0;
 
     fail: if (ma)
         pa_modargs_free(ma);
     pa__done(module);
-    return (-1);
+    return -1;
 }
 
 int pa__get_n_used(pa_module *m) {
     struct userdata *u;
     pa_assert(m);
     pa_assert_se(u = m->userdata);
-    return (pa_sink_linked_by(u->sink));
+    return pa_sink_linked_by(u->sink);
 }
 
 /* \note    See comments in sink_input_kill_cb() above about destruction order! */
@@ -865,12 +846,18 @@ void pa__done(pa_module*m) {
     if (! (u = m->userdata))
         return;
 
-    if (u->lpfs)
-        free(u->lpfs);
-    if (u->hpfs)
-        free(u->hpfs);
-    if (u->apfs)
-        free(u->apfs);
+    if (u->s1lpfs)
+        free(u->s1lpfs);
+    if (u->s1hpfs)
+        free(u->s1hpfs);
+    if (u->s1apfs)
+        free(u->s1apfs);
+    if (u->s2lpfs)
+        free(u->s2lpfs);
+    if (u->s2hpfs)
+        free(u->s2hpfs);
+    if (u->s2apfs)
+        free(u->s2apfs);
     if (u->s1lpdt)
         free(u->s1lpdt);
     if (u->s1hpdt)

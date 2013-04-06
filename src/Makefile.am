@@ -1077,7 +1077,7 @@ modlibexec_LTLIBRARIES += \
 		module-remap-source.la \
 		module-ladspa-sink.la \
 		module-tunnel-sink.la \
-		module-lfe-lp.la \
+		module-lfe-lowpass-sink.la \
 		module-tunnel-source.la \
 		module-position-event-sounds.la \
 		module-augment-properties.la \
@@ -1343,7 +1343,7 @@ SYMDEF_FILES = \
 		module-remap-sink-symdef.h \
 		module-remap-source-symdef.h \
 		module-ladspa-sink-symdef.h \
-		module-lfe-lp-symdef.h \
+		module-lfe-lowpass-sink-symdef.h \
 		module-equalizer-sink-symdef.h \
 		module-match-symdef.h \
 		module-tunnel-sink-symdef.h \
@@ -1607,7 +1607,7 @@ module_ladspa_sink_la_CFLAGS += $(DBUS_CFLAGS)
 module_ladspa_sink_la_LIBADD += $(DBUS_LIBS)
 endif
 
-module_lfe_lp_la_SOURCES = modules/module-lfe-lp.c modules/biquad/biquad-filter.c modules/biquad/biquad-filter.h
+module_lfe_lp_la_SOURCES = modules/module-lfe-lowpass-sink.c modules/biquad/biquad-filter.c modules/biquad/biquad-filter.h
 module_lfe_lp_la_LDFLAGS = $(MODULE_LDFLAGS)
 module_lfe_lp_la_LIBADD = $(MODULE_LIBADD) $(LIBLTDL)
 
