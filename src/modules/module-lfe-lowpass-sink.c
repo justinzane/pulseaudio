@@ -46,7 +46,7 @@
 #include <pulsecore/sample-util.h>
 #include <pulsecore/ltdl-helper.h>
 
-#include <biquad/biquad-filter.h>
+#include <pulsecore/biquad-filter.h>
 #include "module-lfe-lowpass-sink-symdef.h"
 
 PA_MODULE_AUTHOR("Justin Chudgar");
