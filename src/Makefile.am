@@ -1607,9 +1607,9 @@ module_ladspa_sink_la_CFLAGS += $(DBUS_CFLAGS)
 module_ladspa_sink_la_LIBADD += $(DBUS_LIBS)
 endif
 
-module_lfe_lp_la_SOURCES = modules/module-lfe-lowpass-sink.c modules/biquad/biquad-filter.c modules/biquad/biquad-filter.h
-module_lfe_lp_la_LDFLAGS = $(MODULE_LDFLAGS)
-module_lfe_lp_la_LIBADD = $(MODULE_LIBADD) $(LIBLTDL)
+module_lfe_lowpass_sink_la_SOURCES = modules/module-lfe-lowpass-sink.c modules/biquad/biquad-filter.c modules/biquad/biquad-filter.h
+module_lfe_lowpass_sink_la_LDFLAGS = $(MODULE_LDFLAGS)
+module_lfe_lowpass_sink_la_LIBADD = $(MODULE_LIBADD) $(LIBLTDL)
 
 module_equalizer_sink_la_SOURCES = modules/module-equalizer-sink.c
 module_equalizer_sink_la_CFLAGS = $(AM_CFLAGS) $(SERVER_CFLAGS) $(DBUS_CFLAGS) $(FFTW_CFLAGS)

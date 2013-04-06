@@ -127,32 +127,6 @@ static void sink_update_requested_latency_cb(pa_sink *sink) {
     pa_sink_input_set_requested_latency_within_thread(u->sink_input, pa_sink_get_requested_latency_within_thread(sink));
 }
 
-/* This seems like a silly thing. A filter should not influence the general volume of the stream.
- * TODO: Remove me safely. */
-static void sink_set_volume_cb(pa_sink *sink) {
-    struct userdata *u;
-    pa_sink_assert_ref(sink);
-    pa_assert_se(u = sink->userdata);
-
-    if (!PA_SINK_IS_LINKED(pa_sink_get_state(sink)) || !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
-        return;
-
-    pa_sink_input_set_volume(u->sink_input, &sink->real_volume, sink->save_volume, TRUE );
-}
-
-/* This seems like a silly thing. A filter should not influence the general volume of the stream.
- * TODO: Remove me safely or keep me after discussion with reviewers. */
-static void sink_set_mute_cb(pa_sink *s) {
-    struct userdata *u;
-    pa_sink_assert_ref(s);
-    pa_assert_se(u = s->userdata);
-
-    if (!PA_SINK_IS_LINKED(pa_sink_get_state(s)) || !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
-        return;
-
-    pa_sink_input_set_mute(u->sink_input, s->muted, s->save_muted);
-}
-
 /* filters the audio data from sink_input
  * \return always returns (int)0
  * \note Called from I/O thread context */
@@ -572,20 +546,6 @@ static void sink_input_moving_cb(pa_sink_input *i, pa_sink *dest) {
     }
 }
 
-static void sink_input_volume_changed_cb(pa_sink_input *i) {
-    struct userdata *u;
-    pa_sink_input_assert_ref(i);
-    pa_assert_se(u = i->userdata);
-    pa_sink_volume_changed(u->sink, &i->volume);
-}
-
-static void sink_input_mute_changed_cb(pa_sink_input *i) {
-    struct userdata *u;
-    pa_sink_input_assert_ref(i);
-    pa_assert_se(u = i->userdata);
-    pa_sink_mute_changed(u->sink, i->muted);
-}
-
 int pa__init(pa_module *module) {
     struct userdata *u;
     pa_channel_map map;
@@ -696,8 +656,7 @@ int pa__init(pa_module *module) {
     u->sink = pa_sink_new(
             module->core,
             &sink_data,
-            (master->flags & (PA_SINK_LATENCY | PA_SINK_DYNAMIC_LATENCY)) | (
-                    use_volume_sharing ? PA_SINK_SHARE_VOLUME_WITH_MASTER : 0));
+            (master->flags & (PA_SINK_LATENCY | PA_SINK_DYNAMIC_LATENCY)) | 0);
     pa_sink_new_data_done(&sink_data);
 
     if (!u->sink) {
@@ -743,8 +702,8 @@ int pa__init(pa_module *module) {
     u->sink_input->state_change = sink_input_state_change_cb;
     u->sink_input->may_move_to = sink_input_may_move_to_cb;
     u->sink_input->moving = sink_input_moving_cb;
-    u->sink_input->volume_changed = use_volume_sharing ? NULL : sink_input_volume_changed_cb;
-    u->sink_input->mute_changed = sink_input_mute_changed_cb;
+    u->sink_input->volume_changed = NULL;
+    u->sink_input->mute_changed = NULL;
     u->sink_input->userdata = u;
 
     u->sink->input_to_master = u->sink_input;
