@@ -46,10 +46,10 @@
 //#include <pulsecore/sink.h>
 //#include <pulsecore/module.h>
 #include <pulsecore/core-util.h>
+#include <pulsecore/sample-util.h>
 //#include <pulsecore/modargs.h>
 //#include <pulsecore/log.h>
 //#include <pulsecore/rtpoll.h>
-//#include <pulsecore/sample-util.h>
 //#include <pulsecore/ltdl-helper.h>
 
 #define MEMBLOCKQ_MAXLENGTH (16*1024*1024)
@@ -65,6 +65,16 @@ typedef enum biquad_types {
     HIGHPASS,   //!< HIGHPASS
     ALLPASS     //!< ALLPASS
 } biquad_types;
+
+/**
+ * \struct  biquad_filter_map
+ * \brief   maps of channels to filter types, i.e.
+ *          channels[0]=front-left --> ALLPASS,
+ *          channels[5]=lfe        --> LOWPASS, etc.
+ */
+typedef struct biquad_filter_map {
+    biquad_types map[PA_CHANNELS_MAX];
+} biquad_filter_map;
 
 /**
  * \struct biquad_factors: holds biquad filter coefficients/factors for a specific filter type
@@ -104,6 +114,22 @@ typedef struct biquad_history {
     size_t length;                   /** < \var length  buffer length in samples */
     biquad_data_element *buffer;     /** < \var buffer  rewind buffer */
 } biquad_history;
+
+/**
+ * \fn pa_biquad_array
+ * \brief filters an entire array. intended to be used with individual channel arrays as
+ *        provided by biquad_deinterleave.
+ * \param   [in/out]  bqdt          the filter's working data
+ * \param   [in]      bqfs          the coefficients
+ * \param   [in]      src           the source sample array
+ * \param   [out]     dst           the filtered sample array
+ * \param   [in]      num_samples   the number of sample in the array
+ */
+__attribute__((hot)) void pa_biquad_chunk(struct biquad_data *bqdt,
+                                          struct biquad_factors bqfs,
+                                          float *src,
+                                          float *dst,
+                                          size_t num_samples);
 
 /**
  * \fn      pa_biquad
@@ -176,6 +202,35 @@ void pa_init_bqdt(biquad_data *bqdt,
  * \param [in]      bqdtel  the data to be stored
  */
 void pa_store_history(biquad_history *bqhist,
-                                 biquad_data_element *bqdtel) __attribute__((optimize(3), hot));
+                      biquad_data_element *bqdtel);
 
+/**
+ * \fn biquad_deinterleave_chunk
+ * \brief Transposes a memchunk from frame oriented to channel oriented; that is, from an
+ *        array of frames of channel-indexed samples to an array of channels of frame-indexed
+ *        samples.
+ * \param [in]  src_chunk   pointer to normal pa_memchunk
+ * \param [out] dst_chunk   pointer to deinterleaved pa_memchunk
+ * \param [in]  smp_spec    pointer to sample specification
+ * \param [in]  len_chunk   length, in bytes, of the memchunks
+ */
+__attribute__((hot)) void biquad_deinterleave_chunk(pa_memchunk *src_chunk,
+                                                    pa_memchunk *dst_chunk,
+                                                    pa_sample_spec *smp_spec,
+                                                    size_t len_chunk);
+
+/**
+ * \fn biquad_reinterleave_chunk
+ * \brief Transposes a memchunk from channel oriented to frame oriented; that is, from an
+ *        array of channels of frame-indexed samples to an array of frames of channel-indexed
+ *        samples.
+ * \param [in]  src_chunk   pointer to deinterleaved pa_memchunk
+ * \param [out] dst_chunk   pointer to normal pa_memchunk
+ * \param [in]  smp_spec    pointer to sample specification
+ * \param [in]  len_chunk   length, in bytes, of the memchunks
+ */
+__attribute__((hot)) void biquad_reinterleave_chunk(pa_memchunk *src_chunk,
+                                                    pa_memchunk *dst_chunk,
+                                                    pa_sample_spec *smp_spec,
+                                                    size_t len_chunk);
 #endif /* BIQUAD_FILTER_H_ */

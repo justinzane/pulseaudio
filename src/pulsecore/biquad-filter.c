@@ -23,9 +23,22 @@
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
     USA.
  */
-#include <biquad/biquad-filter.h>
+#include <pulsecore/biquad-filter.h>
 
-float pa_biquad(struct biquad_data *bqdt, struct biquad_factors bqfs, float *src) {
+__attribute__((hot)) void pa_biquad_chunk(struct biquad_data *bqdt,
+                                          struct biquad_factors bqfs,
+                                          float *src,
+                                          float *dst,
+                                          size_t num_samples) {
+    size_t i;
+    for (i = 0; i < num_samples; i++) {
+        dst[i] = pa_biquad(bqdt, bqfs, &(src[i]));
+    }
+}
+
+__attribute__((hot)) float pa_biquad(struct biquad_data *bqdt,
+                                     struct biquad_factors bqfs,
+                                     float *src) {
     //#y0= (b0 * x0 + b1 * x1 + b2 * x2) − (a1 * y1 + a2 * y2);
     (*bqdt).w0 = (double)*src;
     (*bqdt).y0 = ((*bqdt).w0 * bqfs.b0 + (*bqdt).w1 * bqfs.b1 + (*bqdt).w2 * bqfs.b2) -
@@ -36,7 +49,6 @@ float pa_biquad(struct biquad_data *bqdt, struct biquad_factors bqfs, float *src
     (*bqdt).y1 = (*bqdt).y0;
     return ((float) (*bqdt).y0);
 }
-
 
 void pa_calc_factors(biquad_factors *bqfs, double sample_rate, double cutoff_freq,
                                 char type, unsigned int stage, unsigned int num_stages) {
@@ -136,3 +148,68 @@ void pa_store_history(biquad_history *bqhist,
         (*bqhist).idx = 0;
 }
 
+/**
+ * \fn biquad_deinterleave_chunk
+ * \brief Transposes a memchunk from frame oriented to channel oriented; that is, from an
+ *        array of frames of channel-indexed samples to an array of channels of frame-indexed
+ *        samples.
+ * \param [in]  src_chunk   pointer to normal pa_memchunk
+ * \param [out] dst_chunk   pointer to deinterleaved pa_memchunk
+ * \param [in]  smp_spec    pointer to sample specification
+ * \param [in]  len_chunk   length, in bytes, of the memchunks
+ */
+__attribute__((hot)) void biquad_deinterleave_chunk(pa_memchunk *src_chunk,
+                                                    pa_memchunk *dst_chunk,
+                                                    pa_sample_spec *smp_spec,
+                                                    size_t len_chunk) {
+    size_t nf, num_frames, smp_size;
+    uint8_t ns, num_chans;
+
+    /* TODO: validate input */
+    pa_assert(smp_spec);
+    pa_assert(src_chunk);
+    pa_assert(dst_chunk);
+    num_chans = (*smp_spec).channels;
+    smp_size = pa_sample_size(smp_spec);
+    pa_assert((len_chunk % (num_chans * smp_size)) == 0);
+    num_frames = (len_chunk / num_chans);
+
+    for (nf = 0; nf < num_frames; nf++) {
+        for (ns = 0; ns < num_chans; ns++) {
+            dst_chunk[(num_frames * ns) + nf] = src_chunk[(num_chans * nf) + ns];
+        }
+    }
+}
+
+/**
+ * \fn biquad_reinterleave_chunk
+ * \brief Transposes a memchunk from channel oriented to frame oriented; that is, from an
+ *        array of channels of frame-indexed samples to an array of frames of channel-indexed
+ *        samples.
+ * \param [in]  src_chunk   pointer to deinterleaved pa_memchunk
+ * \param [out] dst_chunk   pointer to normal pa_memchunk
+ * \param [in]  smp_spec    pointer to sample specification
+ * \param [in]  len_chunk   length, in bytes, of the memchunks
+ */
+__attribute__((hot)) void biquad_reinterleave_chunk(pa_memchunk *src_chunk,
+                                                    pa_memchunk *dst_chunk,
+                                                    pa_sample_spec *smp_spec,
+                                                    size_t len_chunk) {
+    size_t nf, num_frames, smp_size;
+    uint8_t ns, num_chans;
+
+    /* TODO: validate input */
+    pa_assert(smp_spec);
+    pa_assert(src_chunk);
+    pa_assert(dst_chunk);
+    num_chans = (*smp_spec).channels;
+    smp_size = pa_sample_size(smp_spec);
+    pa_assert((len_chunk % (num_chans * smp_size)) == 0);
+    num_frames = (len_chunk / num_chans);
+
+    for (nf = 0; nf < num_frames; nf++) {
+        for (ns = 0; ns < num_chans; ns++) {
+            dst_chunk[(num_frames * ns) + nf] = src_chunk[(num_chans * nf) + ns];
+        }
+    }
+}
