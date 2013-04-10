@@ -115,7 +115,7 @@ typedef struct biquad_map_item_2 {
     biquad_types    type;       /** < the all/high/low pass filter type*/
     biquad_factors *bqfs1;      /** < the stage 1 filter factors*/
     biquad_data    *bqdt1;      /** < the stage 1 filter data */
-    biquad_history *bqhs;       /** < the rewind history buffer */
+    biquad_history *bqhs1;       /** < the rewind history buffer */
 } biquad_map_item_2;
 
 /**
@@ -128,7 +128,8 @@ typedef struct biquad_map_item_4 {
     biquad_data    *bqdt1;      /** < the stage 1 filter data */
     biquad_factors *bqfs2;      /** < the stage 2 filter factors*/
     biquad_data    *bqdt2;      /** < the stage 2 filter data */
-    biquad_history *bqhs;       /** < the rewind history buffer */
+    biquad_history *bqhs1;      /** < the stage 1 rewind history buffer */
+    biquad_history *bqhs2;      /** < the stage 2 rewind history buffer */
 } biquad_map_item_4;
 
 /**
@@ -145,7 +146,7 @@ typedef struct biquad_filter_map_2 {
  */
 typedef struct biquad_filter_map_4 {
     biquad_map_item_4 map[PA_CHANNELS_MAX];
-} biquad_filter_map;
+} biquad_filter_map_4;
 
 /* ***** Functions ************************************************************************** */
 

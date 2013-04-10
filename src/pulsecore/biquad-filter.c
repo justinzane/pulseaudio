@@ -26,23 +26,23 @@
 #include <pulsecore/biquad-filter.h>
 
 __attribute__((hot)) void pa_biquad_chunk(struct biquad_data *bqdt,
-                                          struct biquad_factors bqfs,
+                                          struct biquad_factors *bqfs,
                                           float *src,
                                           float *dst,
                                           size_t num_samples) {
     size_t i;
     for (i = 0; i < num_samples; i++) {
-        dst[i] = pa_biquad(bqdt, bqfs, &(src[i]));
+        dst[i] = pa_biquad(bqdt, bqfs, (src + i));
     }
 }
 
 __attribute__((hot)) float pa_biquad(struct biquad_data *bqdt,
-                                     struct biquad_factors bqfs,
+                                     struct biquad_factors *bqfs,
                                      float *src) {
     //#y0= (b0 * x0 + b1 * x1 + b2 * x2) − (a1 * y1 + a2 * y2);
     (*bqdt).w0 = (double)*src;
-    (*bqdt).y0 = ((*bqdt).w0 * bqfs.b0 + (*bqdt).w1 * bqfs.b1 + (*bqdt).w2 * bqfs.b2) -
-                 ((*bqdt).y1 * bqfs.a1 +(*bqdt).y2 * bqfs.a2);
+    (*bqdt).y0 = ((*bqdt).w0 * bqfs->b0 + (*bqdt).w1 * bqfs->b1 + (*bqdt).w2 * bqfs->b2) -
+                 ((*bqdt).y1 * bqfs->a1 +(*bqdt).y2 * bqfs->a2);
     (*bqdt).w2 = (*bqdt).w1;
     (*bqdt).w1 = (*bqdt).w0;
     (*bqdt).y2 = (*bqdt).y1;

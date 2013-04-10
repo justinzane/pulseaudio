@@ -78,13 +78,14 @@ struct userdata {
     pa_sample_spec sample_spec;
     size_t sz_smp, sz_frm, sz_bqf;
     double lpfreq;                               /* corner/cutoff frequency, user defined */
-    biquad_factors *s1lpfs, *s1hpfs, *s1apfs;    /* lowpass, highpass and allpass coefficients */
-    biquad_factors *s2lpfs, *s2hpfs, *s2apfs;    /* lowpass, highpass and allpass coefficients */
-    biquad_data *s1lpdt, *s1hpdt, *s1apdt;       /* history data for the various filters stage 1*/
-    biquad_history *s1histbuf;                   /* rewind buffer for biquad_data stage 1*/
-    biquad_data *s2lpdt, *s2hpdt, *s2apdt;       /* history data for the various filters stage 2*/
-    biquad_history *s2histbuf;                   /* rewind buffer for biquad_data stage 2*/
-    biquad_types filter_map[PA_CHANNELS_MAX];    /* map of channels index to biquad_types */
+//    biquad_factors *s1lpfs, *s1hpfs, *s1apfs;    /* lowpass, highpass and allpass coefficients */
+//    biquad_factors *s2lpfs, *s2hpfs, *s2apfs;    /* lowpass, highpass and allpass coefficients */
+//    biquad_data *s1lpdt, *s1hpdt, *s1apdt;       /* history data for the various filters stage 1*/
+//    biquad_history *s1histbuf;                   /* rewind buffer for biquad_data stage 1*/
+//    biquad_data *s2lpdt, *s2hpdt, *s2apdt;       /* history data for the various filters stage 2*/
+//    biquad_history *s2histbuf;                   /* rewind buffer for biquad_data stage 2*/
+//    biquad_types filter_map[PA_CHANNELS_MAX];    /* map of channels index to biquad_types */
+    biquad_filter_map_4 *filter_map;
 };
 
 static int sink_process_msg_cb(pa_msgobject *msgobject, int code, void *data, int64_t offset, pa_memchunk *chunk) {
@@ -153,19 +154,21 @@ static void sink_update_requested_latency_cb(pa_sink *sink) {
  * \note Called from I/O thread context */
 __attribute__((optimize(3))) static int sink_input_pop_cb(pa_sink_input *sink_input,
                              size_t nbytes,
-                             pa_memchunk *chunk) {
+                             pa_memchunk *dst_chunk) {
     struct userdata *u;
-    float *src, *dst, *cur_sample, *cur_frame, *dst_frame, *dst_sample;
-    float hp = 0.0f;
-    float lp = 0.0f;
-    float ap = 0.0f;
-    size_t framesize;
-    unsigned num_frames, frm_idx, chan_idx;
-    biquad_data_element bqdtel;
+    pa_memchunk *src, *dst;
+//  float *cur_sample, *cur_frame, *dst_frame, *dst_sample;
+//    float hp = 0.0f;
+//    float lp = 0.0f;
+//    float ap = 0.0f;
+    size_t framesize, num_frames, chan_idx; //, frm_idx
+//    biquad_data_element bqdtel;
     pa_memchunk tchunk;
+    pa_memchunk deint_chunk, reint_chunk;
+    biquad_map_item_4 *current_map_item;
 
     pa_sink_input_assert_ref(sink_input);
-    pa_assert(chunk);
+    pa_assert(dst_chunk);
     pa_assert_se(u = sink_input->userdata);
 
     /* Removed: https://bugs.freedesktop.org/show_bug.cgi?id=53915
@@ -185,16 +188,32 @@ __attribute__((optimize(3))) static int sink_input_pop_cb(pa_sink_input *sink_in
     num_frames = (unsigned) (tchunk.length / framesize);
     pa_assert(num_frames > 0);
 
-    chunk->index = 0;
-    chunk->length = num_frames * framesize;
-    chunk->memblock = pa_memblock_new(sink_input->sink->core->mempool, chunk->length);
+    dst_chunk->index = 0;
+    dst_chunk->length = num_frames * framesize;
+    dst_chunk->memblock = pa_memblock_new(sink_input->sink->core->mempool, dst_chunk->length);
 
-    pa_memblockq_drop(u->memblockq, chunk->length);
+    pa_memblockq_drop(u->memblockq, dst_chunk->length);
 
     src = pa_memblock_acquire_chunk(&tchunk);
-    dst = pa_memblock_acquire(chunk->memblock);
+    dst = pa_memblock_acquire(dst_chunk->memblock);
+    biquad_deinterleave_chunk(src,
+                              &deint_chunk,
+                              &u->sample_spec,
+                              (num_frames * framesize));
+    for (chan_idx = 0; chan_idx < u->sample_spec.channels; chan_idx++) {
+        current_map_item = &u->filter_map->map[chan_idx];
+        pa_biquad_chunk(current_map_item->bqdt1,
+                        current_map_item->bqfs1,
+                        (&deint_chunk + chan_idx*num_frames),
+                        (&reint_chunk + chan_idx*num_frames),
+                        num_frames);
+    }
+    biquad_reinterleave_chunk(&reint_chunk,
+                              dst,
+                              &u->sample_spec,
+                              (num_frames * framesize));
 
-    /* (3) PUT YOUR CODE HERE TO DO SOMETHING WITH THE DATA */
+    /* (3) PUT YOUR CODE HERE TO DO SOMETHING WITH THE DATA
     for (frm_idx = 0; frm_idx < num_frames; frm_idx++) {
         cur_frame = src + frm_idx * u->sample_spec.channels;
         dst_frame = dst + frm_idx * u->sample_spec.channels;
@@ -238,10 +257,10 @@ __attribute__((optimize(3))) static int sink_input_pop_cb(pa_sink_input *sink_in
                 pa_log_error("Should never get here, even in Jersey.");
             }
         }
-    }
+    } */
 
     pa_memblock_release(tchunk.memblock);
-    pa_memblock_release(chunk->memblock);
+    pa_memblock_release(dst_chunk->memblock);
 
     pa_memblock_unref(tchunk.memblock);
 
@@ -262,6 +281,7 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input, size_t rewin
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
 
+/*
     if (u->sink->thread_info.rewind_nbytes > 0) {
         max_rewrite = rewind_bytes + pa_memblockq_get_length(u->memblockq);
         amount = PA_MIN(u->sink->thread_info.rewind_nbytes, max_rewrite);
@@ -269,7 +289,7 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input, size_t rewin
 
         if (amount > 0) {
             pa_memblockq_seek(u->memblockq, -(int64_t)amount, PA_SEEK_RELATIVE, TRUE );
-            /* (5) PUT YOUR CODE HERE TO REWIND YOUR FILTER  */
+             (5) PUT YOUR CODE HERE TO REWIND YOUR FILTER
             rewind_samples = amount / pa_sample_size_of_format(u->sample_spec.format);
             rewind_frames = rewind_samples / u->sample_spec.channels;
             // add the 2 frame backlog for the biquad
@@ -344,6 +364,7 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input, size_t rewin
             u->s2histbuf->idx += frame_size;
         }
     }
+*/
 
     pa_sink_process_rewind(u->sink, amount);
     pa_memblockq_rewind(u->memblockq, rewind_bytes);
@@ -358,7 +379,7 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t ma
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
 
-    if (max_rewind == u->sink->thread_info.max_rewind) {
+/*    if (max_rewind == u->sink->thread_info.max_rewind) {
         pa_log_warn("[%d]%s\n\t called without changing size.\n\tmax_rewind = %lu samples\n",
                     __LINE__, __func__, max_rewind / u->sz_smp);
         pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
@@ -440,7 +461,7 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t ma
             u->s2histbuf->idx = u->s2histbuf->length - (shrinkage - u->s2histbuf->idx);
         pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
         pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
-    }
+    }*/
 }
 
 static void sink_input_update_max_request_cb(pa_sink_input *sink_input, size_t max_request) {
@@ -477,6 +498,8 @@ static void sink_input_detach_cb(pa_sink_input *sink_input) {
  * this is where the rewind buffer gets allocated, not in pa__init. */
 static void sink_input_attach_cb(pa_sink_input *input) {
     struct userdata *u;
+    biquad_map_item_4 *cmi;
+    size_t i;
     pa_sink_input_assert_ref(input);
     pa_assert_se(u = input->userdata);
 
@@ -486,17 +509,20 @@ static void sink_input_attach_cb(pa_sink_input *input) {
     pa_sink_set_fixed_latency_within_thread(u->sink, input->sink->thread_info.fixed_latency);
     pa_sink_set_max_request_within_thread(u->sink, pa_sink_input_get_max_request(input));
 
-    /* Alloc the rewind buffer */
-    if ( (u->sink->thread_info.max_rewind / u->sz_frm) < MIN_MAX_REWIND_FRAMES) {
-        u->s1histbuf->length = MIN_MAX_REWIND_FRAMES * u->sample_spec.channels;
-        u->s2histbuf->length = MIN_MAX_REWIND_FRAMES * u->sample_spec.channels;
-        u->sink->thread_info.max_rewind = MIN_MAX_REWIND_FRAMES * u->sz_frm;
-    } else {
-        u->s1histbuf->length = u->sink->thread_info.max_rewind / u->sz_smp;
-        u->s2histbuf->length = u->sink->thread_info.max_rewind / u->sz_smp;
+    /* Alloc the rewind buffers */
+    for (i = 0; i < u->sample_spec.channels; i++) {
+        cmi = &u->filter_map->map[i];
+        if ( (u->sink->thread_info.max_rewind / u->sz_frm) < MIN_MAX_REWIND_FRAMES) {
+            cmi->bqhs1->length = MIN_MAX_REWIND_FRAMES;
+            cmi->bqhs2->length = MIN_MAX_REWIND_FRAMES;
+            u->sink->thread_info.max_rewind = MIN_MAX_REWIND_FRAMES * u->sz_frm;
+        } else {
+            cmi->bqhs1->length = u->sink->thread_info.max_rewind / u->sz_frm;
+            cmi->bqhs2->length = u->sink->thread_info.max_rewind / u->sz_frm;
+        }
+        cmi->bqhs1->buffer = calloc(cmi->bqhs1->length, sizeof(biquad_data_element));
+        cmi->bqhs2->buffer = calloc(cmi->bqhs2->length, sizeof(biquad_data_element));
     }
-    u->s1histbuf->buffer = calloc(u->s1histbuf->length, sizeof(biquad_data_element));
-    u->s2histbuf->buffer = calloc(u->s2histbuf->length, sizeof(biquad_data_element));
 
     /* FIXME: Too small max_rewind:
      * https://bugs.freedesktop.org/show_bug.cgi?id=53709 */
@@ -570,6 +596,7 @@ static void sink_input_moving_cb(pa_sink_input *i, pa_sink *dest) {
 int pa__init(pa_module *module) {
     struct userdata *u;
     pa_channel_map map;
+    biquad_map_item_4 *current_map_item;
     pa_modargs *ma;
     pa_sink *master = NULL;
     pa_sink_input_new_data sink_input_data;
@@ -615,33 +642,6 @@ int pa__init(pa_module *module) {
         goto fail;
     }
 */
-
-    /* setup filter_map
-     * 'l' for lowpass, 'h' for highpass, 'a' allpass
-     * lfe --> lowpass
-     * .*center --> high
-     * .*left/right/aux -> allpass
-     */
-    pa_log_info("\nfilter_map=\n");
-    for (int i = 0; i < u->sample_spec.channels; i++) {
-        switch (map.map[i]) {
-            case PA_CHANNEL_POSITION_CENTER:
-            case PA_CHANNEL_POSITION_REAR_CENTER:
-            case PA_CHANNEL_POSITION_FRONT_LEFT_OF_CENTER:
-            case PA_CHANNEL_POSITION_FRONT_RIGHT_OF_CENTER:
-            case PA_CHANNEL_POSITION_TOP_CENTER:
-            case PA_CHANNEL_POSITION_TOP_FRONT_CENTER:
-            case PA_CHANNEL_POSITION_TOP_REAR_CENTER:
-                u->filter_map[i] = HIGHPASS;
-                break;
-            case PA_CHANNEL_POSITION_LFE:
-                u->filter_map[i] = LOWPASS;
-                break;
-            default:
-                u->filter_map[i] = ALLPASS;
-        }
-        pa_log_info("\t%d %c\n", i, u->filter_map[i]);
-    }
 
     u->module = module;
     module->userdata = u;
@@ -741,25 +741,9 @@ int pa__init(pa_module *module) {
 
     /* (9) INITIALIZE ANYTHING ELSE YOU NEED HERE */
     // setup shortcuts to common type sizes
-    u->sz_bqf = sizeof(biquad_factors);
     u->sz_smp = pa_sample_size(& (u->sample_spec));
     u->sz_frm = u->sz_smp * u->sample_spec.channels;
 
-    // alloc filter factors
-    u->s1lpfs = malloc(u->sz_bqf);
-    u->s1hpfs = malloc(u->sz_bqf);
-    u->s1apfs = malloc(u->sz_bqf);
-    u->s2lpfs = malloc(u->sz_bqf);
-    u->s2hpfs = malloc(u->sz_bqf);
-    u->s2apfs = malloc(u->sz_bqf);
-
-    // alloc stage 1&2 biquad data
-    u->s1lpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->s1hpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->s1apdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->s2lpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->s2hpdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
-    u->s2apdt = malloc(u->sample_spec.channels * sizeof(biquad_data));
     /* If the sink is unlinked, max_rewind doesn't have any meaning anyway. You
      * get notifications about connection state changes via the attach() and
      * detach() callbacks. You can check in attach() what the current max_rewind
@@ -770,32 +754,82 @@ int pa__init(pa_module *module) {
      * In addition to updating the rewind buffer in update_max_rewind(), you
      * need to initialize/update it also in attach(), but I didn't think about
      * this before now. <tanuk> */
-    // alloc rewind buffer structs but NOT the buffers.
-    u->s1histbuf = malloc(4 * sizeof(size_t));
-    u->s2histbuf = malloc(4 * sizeof(size_t));
-    u->s1histbuf->idx = 0;
-    u->s1histbuf->start = 0;
-    u->s1histbuf->length = 0;
-    u->s1histbuf->buffer = NULL;
-    u->s2histbuf->idx = 0;
-    u->s2histbuf->start = 0;
-    u->s2histbuf->length = 0;
-    u->s2histbuf->buffer = NULL;
 
-    // init filter data
-    pa_calc_factors(u->s1apfs, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 1, 2);
-    pa_calc_factors(u->s1hpfs, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 1, 2);
-    pa_calc_factors(u->s1lpfs, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 1, 2);
-    pa_calc_factors(u->s2apfs, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 2, 2);
-    pa_calc_factors(u->s2hpfs, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 2, 2);
-    pa_calc_factors(u->s2lpfs, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 2, 2);
-
-    pa_init_bqdt(u->s1apdt, u->sample_spec.channels);
-    pa_init_bqdt(u->s1hpdt, u->sample_spec.channels);
-    pa_init_bqdt(u->s1lpdt, u->sample_spec.channels);
-    pa_init_bqdt(u->s2apdt, u->sample_spec.channels);
-    pa_init_bqdt(u->s2hpdt, u->sample_spec.channels);
-    pa_init_bqdt(u->s2lpdt, u->sample_spec.channels);
+    /* setup filter_map */
+    u->filter_map = malloc(sizeof(biquad_map_item_4) * u->sample_spec.channels);
+    for (int i = 0; i < u->sample_spec.channels; i++) {
+        current_map_item = &u->filter_map->map[i];
+        switch (map.map[i]) {
+            case PA_CHANNEL_POSITION_CENTER:
+            case PA_CHANNEL_POSITION_REAR_CENTER:
+            case PA_CHANNEL_POSITION_FRONT_LEFT_OF_CENTER:
+            case PA_CHANNEL_POSITION_FRONT_RIGHT_OF_CENTER:
+            case PA_CHANNEL_POSITION_TOP_CENTER:
+            case PA_CHANNEL_POSITION_TOP_FRONT_CENTER:
+            case PA_CHANNEL_POSITION_TOP_REAR_CENTER:
+                current_map_item->type = HIGHPASS;
+                current_map_item->bqfs1 = malloc(sizeof(biquad_factors));
+                pa_calc_factors(current_map_item->bqfs1, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 1, 2);
+                current_map_item->bqfs2 = malloc(sizeof(biquad_factors));
+                pa_calc_factors(current_map_item->bqfs2, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 2, 2);
+                current_map_item->bqdt1 = malloc(sizeof(biquad_data));
+                pa_init_bqdt(current_map_item->bqdt1, u->sample_spec.channels);
+                current_map_item->bqdt2 = malloc(sizeof(biquad_data));
+                pa_init_bqdt(current_map_item->bqdt2, u->sample_spec.channels);
+                current_map_item->bqhs1 = malloc(sizeof(biquad_history));
+                current_map_item->bqhs1->idx = 0;
+                current_map_item->bqhs1->start = 0;
+                current_map_item->bqhs1->length = 0;
+                current_map_item->bqhs1->buffer = NULL;
+                current_map_item->bqhs2 = malloc(sizeof(biquad_history));
+                current_map_item->bqhs2->idx = 0;
+                current_map_item->bqhs2->start = 0;
+                current_map_item->bqhs2->length = 0;
+                current_map_item->bqhs2->buffer = NULL;
+                break;
+            case PA_CHANNEL_POSITION_LFE:
+                current_map_item->type = LOWPASS;
+                current_map_item->bqfs1 = malloc(sizeof(biquad_factors));
+                pa_calc_factors(current_map_item->bqfs1, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 1, 2);
+                current_map_item->bqfs2 = malloc(sizeof(biquad_factors));
+                pa_calc_factors(current_map_item->bqfs2, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 2, 2);
+                current_map_item->bqdt1 = malloc(sizeof(biquad_data));
+                pa_init_bqdt(current_map_item->bqdt1, u->sample_spec.channels);
+                current_map_item->bqdt2 = malloc(sizeof(biquad_data));
+                pa_init_bqdt(current_map_item->bqdt2, u->sample_spec.channels);
+                current_map_item->bqhs1 = malloc(sizeof(biquad_history));
+                current_map_item->bqhs1->idx = 0;
+                current_map_item->bqhs1->start = 0;
+                current_map_item->bqhs1->length = 0;
+                current_map_item->bqhs1->buffer = NULL;
+                current_map_item->bqhs2 = malloc(sizeof(biquad_history));
+                current_map_item->bqhs2->idx = 0;
+                current_map_item->bqhs2->start = 0;
+                current_map_item->bqhs2->length = 0;
+                current_map_item->bqhs2->buffer = NULL;
+                break;
+            default:
+                current_map_item->type = ALLPASS;
+                current_map_item->bqfs1 = malloc(sizeof(biquad_factors));
+                pa_calc_factors(current_map_item->bqfs1, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 1, 2);
+                current_map_item->bqfs2 = malloc(sizeof(biquad_factors));
+                pa_calc_factors(current_map_item->bqfs1, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 2, 2);
+                current_map_item->bqdt1 = malloc(sizeof(biquad_data));
+                pa_init_bqdt(current_map_item->bqdt1, u->sample_spec.channels);
+                current_map_item->bqdt2 = malloc(sizeof(biquad_data));
+                pa_init_bqdt(current_map_item->bqdt2, u->sample_spec.channels);
+                current_map_item->bqhs1 = malloc(sizeof(biquad_history));
+                current_map_item->bqhs1->idx = 0;
+                current_map_item->bqhs1->start = 0;
+                current_map_item->bqhs1->length = 0;
+                current_map_item->bqhs1->buffer = NULL;
+                current_map_item->bqhs2 = malloc(sizeof(biquad_history));
+                current_map_item->bqhs2->idx = 0;
+                current_map_item->bqhs2->start = 0;
+                current_map_item->bqhs2->length = 0;
+                current_map_item->bqhs2->buffer = NULL;
+        }
+    }
 
     pa_sink_put(u->sink);
     pa_sink_input_put(u->sink_input);
@@ -819,43 +853,32 @@ int pa__get_n_used(pa_module *m) {
 /* \note    See comments in sink_input_kill_cb() above about destruction order! */
 void pa__done(pa_module*m) {
     struct userdata *u;
+    size_t i;
+    biquad_map_item_4 *cmi;
     pa_assert(m);
 
     if (! (u = m->userdata))
         return;
 
-    if (u->s1lpfs)
-        free(u->s1lpfs);
-    if (u->s1hpfs)
-        free(u->s1hpfs);
-    if (u->s1apfs)
-        free(u->s1apfs);
-    if (u->s2lpfs)
-        free(u->s2lpfs);
-    if (u->s2hpfs)
-        free(u->s2hpfs);
-    if (u->s2apfs)
-        free(u->s2apfs);
-    if (u->s1lpdt)
-        free(u->s1lpdt);
-    if (u->s1hpdt)
-        free(u->s1hpdt);
-    if (u->s1apdt)
-        free(u->s1apdt);
-    if ( (* (u->s1histbuf)).buffer)
-        free( (* (u->s1histbuf)).buffer);
-    if (u->s1histbuf)
-        free(u->s1histbuf);
-    if (u->s2lpdt)
-        free(u->s2lpdt);
-    if (u->s2hpdt)
-        free(u->s2hpdt);
-    if (u->s2apdt)
-        free(u->s2apdt);
-    if ( (* (u->s2histbuf)).buffer)
-        free( (* (u->s2histbuf)).buffer);
-    if (u->s2histbuf)
-        free(u->s2histbuf);
+    for (i = 0; i < u->sample_spec.channels; i++) {
+        cmi = &u->filter_map->map[i];
+        if (cmi->bqdt1)
+            free(cmi->bqdt1);
+        if (cmi->bqdt2)
+            free(cmi->bqdt1);
+        if (cmi->bqfs1)
+            free(cmi->bqdt1);
+        if (cmi->bqfs2)
+            free(cmi->bqdt1);
+        if (cmi->bqhs1->buffer)
+            free(cmi->bqhs1->buffer);
+        if (cmi->bqhs2->buffer)
+            free(cmi->bqhs2->buffer);
+        if (cmi->bqhs1)
+            free(cmi->bqhs1);
+        if (cmi->bqhs2)
+            free(cmi->bqhs2);
+    }
 
     if (u->sink_input)
         pa_sink_input_unlink(u->sink_input);
@@ -869,5 +892,5 @@ void pa__done(pa_module*m) {
         pa_memblockq_free(u->memblockq);
 
     pa_xfree(u);
-    pa_log_debug("All done. Bye from module-lfe-lowpass-sink.", __FILE__, __LINE__);
+    pa_log_debug("All done. Bye from module-lfe-lowpass-sink.");
 }
