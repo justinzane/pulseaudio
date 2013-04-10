@@ -56,6 +56,8 @@
 #define MIN_CUTOFF_FREQ 20.0
 #define MAX_CUTOFF_FREQ 500.0
 
+/* ***** Data Definitions ******************************************************************* */
+
 /**
  * \enum biquad_types
  * \note allpass, highpass and lowpass are currently implemented.
@@ -65,16 +67,6 @@ typedef enum biquad_types {
     HIGHPASS,   //!< HIGHPASS
     ALLPASS     //!< ALLPASS
 } biquad_types;
-
-/**
- * \struct  biquad_filter_map
- * \brief   maps of channels to filter types, i.e.
- *          channels[0]=front-left --> ALLPASS,
- *          channels[5]=lfe        --> LOWPASS, etc.
- */
-typedef struct biquad_filter_map {
-    biquad_types map[PA_CHANNELS_MAX];
-} biquad_filter_map;
 
 /**
  * \struct biquad_factors: holds biquad filter coefficients/factors for a specific filter type
@@ -116,6 +108,48 @@ typedef struct biquad_history {
 } biquad_history;
 
 /**
+ * \struct  biquad_map_item_2
+ * \brief   mapping of 2nd order filter configuration and data structures to an audio channel
+ */
+typedef struct biquad_map_item_2 {
+    biquad_types    type;       /** < the all/high/low pass filter type*/
+    biquad_factors *bqfs1;      /** < the stage 1 filter factors*/
+    biquad_data    *bqdt1;      /** < the stage 1 filter data */
+    biquad_history *bqhs;       /** < the rewind history buffer */
+} biquad_map_item_2;
+
+/**
+ * \struct  biquad_map_item_4
+ * \brief   mapping of 4th order filter configuration and data structures to an audio channel
+ */
+typedef struct biquad_map_item_4 {
+    biquad_types    type;       /** < the all/high/low pass filter type*/
+    biquad_factors *bqfs1;      /** < the stage 1 filter factors*/
+    biquad_data    *bqdt1;      /** < the stage 1 filter data */
+    biquad_factors *bqfs2;      /** < the stage 2 filter factors*/
+    biquad_data    *bqdt2;      /** < the stage 2 filter data */
+    biquad_history *bqhs;       /** < the rewind history buffer */
+} biquad_map_item_4;
+
+/**
+ * \struct  biquad_filter_map_2
+ * \brief   mapping between filters and audio channels for a 2nd order filter
+ */
+typedef struct biquad_filter_map_2 {
+    biquad_map_item_2 map[PA_CHANNELS_MAX];
+} biquad_filter_map_2;
+
+/**
+ * \struct  biquad_filter_map_2
+ * \brief   mapping between filters and audio channels for a 2nd order filter
+ */
+typedef struct biquad_filter_map_4 {
+    biquad_map_item_4 map[PA_CHANNELS_MAX];
+} biquad_filter_map;
+
+/* ***** Functions ************************************************************************** */
+
+/**
  * \fn pa_biquad_array
  * \brief filters an entire array. intended to be used with individual channel arrays as
  *        provided by biquad_deinterleave.
@@ -126,7 +160,7 @@ typedef struct biquad_history {
  * \param   [in]      num_samples   the number of sample in the array
  */
 __attribute__((hot)) void pa_biquad_chunk(struct biquad_data *bqdt,
-                                          struct biquad_factors bqfs,
+                                          struct biquad_factors *bqfs,
                                           float *src,
                                           float *dst,
                                           size_t num_samples);
@@ -140,9 +174,9 @@ __attribute__((hot)) void pa_biquad_chunk(struct biquad_data *bqdt,
  * \note    y0= (b0 * w0 + b1 * w1 + b2 * w2) − (a1 * y1 + a2 * y2);
  * \see     http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
  */
-float pa_biquad(struct biquad_data *bqdt,
-                           struct biquad_factors bqfs,
-                           float *src) __attribute__((optimize(3), hot));
+__attribute__((hot)) float pa_biquad(struct biquad_data *bqdt,
+                                     struct biquad_factors *bqfs,
+                                     float *src);
 
 /**
  * \fn                          pa_calc_factors
