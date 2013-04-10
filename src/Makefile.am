@@ -1608,7 +1608,7 @@ module_ladspa_sink_la_LIBADD += $(DBUS_LIBS)
 endif
 
 module_lfe_lowpass_sink_la_SOURCES = modules/module-lfe-lowpass-sink.c \
-		modules/biquad/biquad-filter.c modules/biquad/biquad-filter.h
+		pulsecore/biquad-filter.c pulsecore/biquad-filter.h
 module_lfe_lowpass_sink_la_LDFLAGS = $(MODULE_LDFLAGS)
 module_lfe_lowpass_sink_la_LIBADD = $(MODULE_LIBADD) $(LIBLTDL)
 
