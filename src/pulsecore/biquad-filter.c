@@ -213,3 +213,92 @@ __attribute__((hot)) void biquad_reinterleave_chunk(pa_memchunk *src_chunk,
         }
     }
 }
+
+__attribute__((hot)) void biquad_rewind_filter(size_t rewind_frames,
+                                               biquad_filter_map_4 *filter_map) {
+    size_t i;
+    biquad_map_item_4 *cmi;
+
+    if (rewind_frames == 0) {
+        pa_log_error("%d : %s : rewind_frames was 0.", __LINE__, __func__);
+        return;
+    }
+
+    for (i = 0; i < filter_map->num_chans; i++) {
+        cmi = &filter_map->map[i];
+        if (rewind_frames > cmi->bqhs1->length) {
+            pa_log_error("%d : %s : rewind_frames was too long.", __LINE__, __func__);
+            break;
+        }
+        /* Handle stage 1*/
+        /* check if we have to wrap the ring buffer backwards. */
+        if (cmi->bqhs1->idx > rewind_frames) {  // no wrap needed
+            cmi->bqhs1->idx -= rewind_frames;
+        } else {                                // must wrap
+            cmi->bqhs1->idx = cmi->bqhs1->length - (rewind_frames - cmi->bqhs1->idx);
+        }
+
+        /*  pretend loop through frames -2, -1, 0 and put history into working,
+            making sure that we do not access a negative index.     */
+        switch (cmi->bqhs1->idx) {
+            case 0:
+                cmi->bqdt1->w2 = (cmi->bqhs1->buffer[cmi->bqhs1->length-2]).w0;
+                cmi->bqdt1->w1 = (cmi->bqhs1->buffer[cmi->bqhs1->length-1]).w0;
+                cmi->bqdt1->w0 = (cmi->bqhs1->buffer[cmi->bqhs1->idx-0]).w0;
+                cmi->bqdt1->y2 = (cmi->bqhs1->buffer[cmi->bqhs1->length-2]).y0;
+                cmi->bqdt1->y1 = (cmi->bqhs1->buffer[cmi->bqhs1->length-1]).y0;
+                cmi->bqdt1->y0 = (cmi->bqhs1->buffer[cmi->bqhs1->idx-0]).y0;
+                break;
+            case 1:
+                cmi->bqdt1->w2 = (cmi->bqhs1->buffer[cmi->bqhs1->length-1]).w0;
+                cmi->bqdt1->w1 = (cmi->bqhs1->buffer[cmi->bqhs1->idx-1]).w0;
+                cmi->bqdt1->w0 = (cmi->bqhs1->buffer[cmi->bqhs1->idx-0]).w0;
+                cmi->bqdt1->y2 = (cmi->bqhs1->buffer[cmi->bqhs1->length-1]).y0;
+                cmi->bqdt1->y1 = (cmi->bqhs1->buffer[cmi->bqhs1->idx-1]).y0;
+                cmi->bqdt1->y0 = (cmi->bqhs1->buffer[cmi->bqhs1->idx-0]).y0;
+                break;
+            default:
+                cmi->bqdt1->w2 = (cmi->bqhs1->buffer[cmi->bqhs1->idx-2]).w0;
+                cmi->bqdt1->w1 = (cmi->bqhs1->buffer[cmi->bqhs1->idx-1]).w0;
+                cmi->bqdt1->w0 = (cmi->bqhs1->buffer[cmi->bqhs1->idx-0]).w0;
+                cmi->bqdt1->y2 = (cmi->bqhs1->buffer[cmi->bqhs1->idx-2]).y0;
+                cmi->bqdt1->y1 = (cmi->bqhs1->buffer[cmi->bqhs1->idx-1]).y0;
+                cmi->bqdt1->y0 = (cmi->bqhs1->buffer[cmi->bqhs1->idx-0]).y0;
+        }
+        /* Handle stage 2*/
+        /* check if we have to wrap the ring buffer backwards. */
+        if (cmi->bqhs2->idx > rewind_frames) {  // no wrap needed
+            cmi->bqhs2->idx -= rewind_frames;
+        } else {                                // must wrap
+            cmi->bqhs2->idx = cmi->bqhs2->length - (rewind_frames - cmi->bqhs2->idx);
+        }
+
+        /*  pretend loop through frames -2, -1, 0 and put history into working,
+            making sure that we do not access a negative index.     */
+        switch (cmi->bqhs2->idx) {
+            case 0:
+                cmi->bqdt2->w2 = (cmi->bqhs2->buffer[cmi->bqhs2->length-2]).w0;
+                cmi->bqdt2->w1 = (cmi->bqhs2->buffer[cmi->bqhs2->length-1]).w0;
+                cmi->bqdt2->w0 = (cmi->bqhs2->buffer[cmi->bqhs2->idx-0]).w0;
+                cmi->bqdt2->y2 = (cmi->bqhs2->buffer[cmi->bqhs2->length-2]).y0;
+                cmi->bqdt2->y1 = (cmi->bqhs2->buffer[cmi->bqhs2->length-1]).y0;
+                cmi->bqdt2->y0 = (cmi->bqhs2->buffer[cmi->bqhs2->idx-0]).y0;
+                break;
+            case 1:
+                cmi->bqdt2->w2 = (cmi->bqhs2->buffer[cmi->bqhs2->length-1]).w0;
+                cmi->bqdt2->w1 = (cmi->bqhs2->buffer[cmi->bqhs2->idx-1]).w0;
+                cmi->bqdt2->w0 = (cmi->bqhs2->buffer[cmi->bqhs2->idx-0]).w0;
+                cmi->bqdt2->y2 = (cmi->bqhs2->buffer[cmi->bqhs2->length-1]).y0;
+                cmi->bqdt2->y1 = (cmi->bqhs2->buffer[cmi->bqhs2->idx-1]).y0;
+                cmi->bqdt2->y0 = (cmi->bqhs2->buffer[cmi->bqhs2->idx-0]).y0;
+                break;
+            default:
+                cmi->bqdt2->w2 = (cmi->bqhs2->buffer[cmi->bqhs2->idx-2]).w0;
+                cmi->bqdt2->w1 = (cmi->bqhs2->buffer[cmi->bqhs2->idx-1]).w0;
+                cmi->bqdt2->w0 = (cmi->bqhs2->buffer[cmi->bqhs2->idx-0]).w0;
+                cmi->bqdt2->y2 = (cmi->bqhs2->buffer[cmi->bqhs2->idx-2]).y0;
+                cmi->bqdt2->y1 = (cmi->bqhs2->buffer[cmi->bqhs2->idx-1]).y0;
+                cmi->bqdt2->y0 = (cmi->bqhs2->buffer[cmi->bqhs2->idx-0]).y0;
+        }
+    }
+}

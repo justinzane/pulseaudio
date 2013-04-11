@@ -756,7 +756,9 @@ int pa__init(pa_module *module) {
      * this before now. <tanuk> */
 
     /* setup filter_map */
-    u->filter_map = malloc(sizeof(biquad_map_item_4) * u->sample_spec.channels);
+    u->filter_map = malloc(sizeof(biquad_filter_map_4));
+    u->filter_map->num_chans = u->sample_spec.channels;
+    //u->filter_map->map = malloc(sizeof(biquad_map_item_4) * u->sample_spec.channels);
     for (int i = 0; i < u->sample_spec.channels; i++) {
         current_map_item = &u->filter_map->map[i];
         switch (map.map[i]) {

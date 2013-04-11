@@ -108,17 +108,6 @@ typedef struct biquad_history {
 } biquad_history;
 
 /**
- * \struct  biquad_map_item_2
- * \brief   mapping of 2nd order filter configuration and data structures to an audio channel
- */
-typedef struct biquad_map_item_2 {
-    biquad_types    type;       /** < the all/high/low pass filter type*/
-    biquad_factors *bqfs1;      /** < the stage 1 filter factors*/
-    biquad_data    *bqdt1;      /** < the stage 1 filter data */
-    biquad_history *bqhs1;       /** < the rewind history buffer */
-} biquad_map_item_2;
-
-/**
  * \struct  biquad_map_item_4
  * \brief   mapping of 4th order filter configuration and data structures to an audio channel
  */
@@ -133,19 +122,12 @@ typedef struct biquad_map_item_4 {
 } biquad_map_item_4;
 
 /**
- * \struct  biquad_filter_map_2
- * \brief   mapping between filters and audio channels for a 2nd order filter
- */
-typedef struct biquad_filter_map_2 {
-    biquad_map_item_2 map[PA_CHANNELS_MAX];
-} biquad_filter_map_2;
-
-/**
- * \struct  biquad_filter_map_2
- * \brief   mapping between filters and audio channels for a 2nd order filter
+ * \struct  biquad_filter_map_4
+ * \brief   mapping between filters and audio channels for a 4th order filter
  */
 typedef struct biquad_filter_map_4 {
-    biquad_map_item_4 map[PA_CHANNELS_MAX];
+    size_t            num_chans;            /** < number of channels actually represented */
+    biquad_map_item_4 map[PA_CHANNELS_MAX]; /** < the data */
 } biquad_filter_map_4;
 
 /* ***** Functions ************************************************************************** */
@@ -268,4 +250,14 @@ __attribute__((hot)) void biquad_reinterleave_chunk(pa_memchunk *src_chunk,
                                                     pa_memchunk *dst_chunk,
                                                     pa_sample_spec *smp_spec,
                                                     size_t len_chunk);
+/**
+ * \fn      biquad_rewind_frames
+ * \brief   used by clients like modules to rewind the filters history buffer when the audio
+ *          stream is rewound in pulse
+ * \param [in]      rewind_frames   the number of frames to rewind. should never be 0 or greater
+ *                                  than the length of the buffer
+ * \param [in/out]  filter_map      the data structure being rewound
+ */
+__attribute__((hot)) void biquad_rewind_filter(size_t rewind_frames,
+                                               biquad_filter_map_4 *filter_map);
 #endif /* BIQUAD_FILTER_H_ */
