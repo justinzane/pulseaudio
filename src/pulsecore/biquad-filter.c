@@ -302,3 +302,49 @@ __attribute__((hot)) void biquad_rewind_filter(size_t rewind_frames,
         }
     }
 }
+
+void biquad_resize_rewind_buffer(size_t rewind_frames,
+                                 biquad_filter_map_4 *filter_map) {
+    biquad_map_item_4 *cmi;
+    size_t shrinkage = 0;
+    size_t i = 0;
+
+    /* We must keep at least 3 samples to repopulate biquad_data */
+    rewind_frames += 2;
+
+    for (i = 0; i < filter_map->num_chans; i++) {
+        cmi = &filter_map->map[i];
+        if (rewind_frames == cmi->bqhs1->length) {
+            pa_log_warn("%d:%s called without changing size.", __LINE__, __func__);
+            return;
+        }
+
+        // grow histbufs to the new size
+        if (rewind_frames > cmi->bqhs1->length) {
+            pa_log_debug("[%d]%s all in frames\n\tcur rewind_frames = %12lu\n\treq rewind_frames = %12lu\n",
+                         __LINE__, __func__, cmi->bqhs1->length, rewind_frames);
+                cmi->bqhs1->buffer = realloc(cmi->bqhs1->buffer, rewind_frames*sizeof(biquad_data_element));
+                cmi->bqhs2->buffer = realloc(cmi->bqhs2->buffer, rewind_frames*sizeof(biquad_data_element));
+                cmi->bqhs1->length = rewind_frames;
+                cmi->bqhs2->length = rewind_frames;
+        }
+
+        // shrink to new size
+        if (rewind_frames < cmi->bqhs1->length) {
+            pa_log_debug("[%d]%s all in frames\n\tcur rewind_frames = %12lu\n\treq rewind_frames = %12lu\n",
+                         __LINE__, __func__, cmi->bqhs1->length, rewind_frames);
+            shrinkage = cmi->bqhs1->length - rewind_frames;
+            // loop through and move everybody back by shrinkage
+            for (i = 0; i < shrinkage; i++)
+                cmi->bqhs1->buffer[i + (cmi->bqhs1->length - shrinkage)] = cmi->bqhs1->buffer[i];
+            for (i = 0; i < (cmi->bqhs1->length - shrinkage); i++)
+                cmi->bqhs1->buffer[i] = cmi->bqhs1->buffer[i + shrinkage];
+            cmi->bqhs1->length -= shrinkage;
+            cmi->bqhs1->buffer = realloc(cmi->bqhs1->buffer, (sizeof(biquad_data_element) * cmi->bqhs1->length));
+            if (cmi->bqhs1->idx > shrinkage)
+                cmi->bqhs1->idx -= shrinkage;
+            else
+                cmi->bqhs1->idx = cmi->bqhs1->length - (shrinkage - cmi->bqhs1->idx);
+        }
+    }
+}

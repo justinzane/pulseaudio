@@ -281,6 +281,7 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input, size_t rewin
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
 
+    //TODO: call biquad_filter's rewind
 /*
     if (u->sink->thread_info.rewind_nbytes > 0) {
         max_rewrite = rewind_bytes + pa_memblockq_get_length(u->memblockq);
@@ -379,6 +380,8 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t ma
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
 
+    //TODO: Move functional code to biquad-filter.c
+    //TODO: call update rewind in biquad-filter
 /*    if (max_rewind == u->sink->thread_info.max_rewind) {
         pa_log_warn("[%d]%s\n\t called without changing size.\n\tmax_rewind = %lu samples\n",
                     __LINE__, __func__, max_rewind / u->sz_smp);
@@ -510,6 +513,7 @@ static void sink_input_attach_cb(pa_sink_input *input) {
     pa_sink_set_max_request_within_thread(u->sink, pa_sink_input_get_max_request(input));
 
     /* Alloc the rewind buffers */
+    //TODO: Move allocation of rewind buffer into biquad-filter.c/h
     for (i = 0; i < u->sample_spec.channels; i++) {
         cmi = &u->filter_map->map[i];
         if ( (u->sink->thread_info.max_rewind / u->sz_frm) < MIN_MAX_REWIND_FRAMES) {

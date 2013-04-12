@@ -260,4 +260,15 @@ __attribute__((hot)) void biquad_reinterleave_chunk(pa_memchunk *src_chunk,
  */
 __attribute__((hot)) void biquad_rewind_filter(size_t rewind_frames,
                                                biquad_filter_map_4 *filter_map);
+
+/**
+ * \fn      biquad_resize_rewind_buffer
+ * \brief   logically synonymous with pa_update_max_rewind, resizes the rewind histor buffer
+ * \param [in]      rewind_frames   the number of frames to be able to rewind.
+ * \param [in/out]  filter_map      the data structure being rewound
+ * \note    it is the author's opinion that the value of rewind_frames should be subject to
+ *          minimum and maximum size constraints #defined in pulse/defs.h.
+ */
+void biquad_resize_rewind_buffer(size_t rewind_frames,
+                                 biquad_filter_map_4 *filter_map);
 #endif /* BIQUAD_FILTER_H_ */
