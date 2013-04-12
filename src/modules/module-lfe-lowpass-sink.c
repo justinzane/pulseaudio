@@ -374,15 +374,11 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input, size_t rewin
 /* FIXME: Too small max_rewind: https://bugs.freedesktop.org/show_bug.cgi?id=53709 */
 static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t max_rewind) {
     struct userdata *u;
-    size_t shrinkage = 0;
-    size_t growth = 0;
-    size_t i = 0;
+    size_t max_rewind_frames = 0;
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
 
-    //TODO: Move functional code to biquad-filter.c
-    //TODO: call update rewind in biquad-filter
-/*    if (max_rewind == u->sink->thread_info.max_rewind) {
+    if (max_rewind == u->sink->thread_info.max_rewind) {
         pa_log_warn("[%d]%s\n\t called without changing size.\n\tmax_rewind = %lu samples\n",
                     __LINE__, __func__, max_rewind / u->sz_smp);
         pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
@@ -390,7 +386,9 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t ma
         return;
     }
 
-    if ( (max_rewind / u->sz_frm) < MIN_MAX_REWIND_FRAMES) {
+    max_rewind_frames = (max_rewind / u->sz_frm);
+
+    if ( max_rewind_frames < MIN_MAX_REWIND_FRAMES) {
         // This is an attempt to prevent excessive realloc shrinks and grows
         pa_log_warn("[%d]%s\n\t called with too small size.\n\tmax_rewind = %lu samples\n",
                     __LINE__, __func__, max_rewind / u->sz_smp);
@@ -399,72 +397,11 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t ma
         return;
     }
 
-    // grow histbufs to the new size
-    if (max_rewind > u->sink->thread_info.max_rewind) {
-        // convert to num samples
-        growth = (max_rewind / u->sz_smp) - u->s1histbuf->length;
-        pa_log_debug("[%d]%s all in samples\n\tcur max_rewind = %12lu\n\treq max_rewind = %12lu\n"
-                     "\tgrowth =         %12lu\n\tidx =            %12lu\n\tlength =         %12lu\n",
-                     __LINE__, __func__, u->sink->thread_info.max_rewind / u->sz_smp, max_rewind / u->sz_smp, growth,
-                     u->s1histbuf->idx, u->s1histbuf->length);
-        // stage 1
-        u->s1histbuf->buffer = realloc(u->s1histbuf->buffer, (sizeof(biquad_data_element) * (u->s1histbuf->length + growth)));
-        for (i = u->s1histbuf->length; i < (u->s1histbuf->length + growth); i++) {
-            u->s1histbuf->buffer[i].w0 = 0.0;
-            u->s1histbuf->buffer[i].y0 = 0.0;
-        }
-        u->s1histbuf->length += growth;
-        // stage 2
-        u->s2histbuf->buffer = realloc(u->s2histbuf->buffer, (sizeof(biquad_data_element) * (u->s2histbuf->length + growth)));
-        for (i = u->s2histbuf->length; i < (u->s2histbuf->length + growth); i++) {
-            u->s2histbuf->buffer[i].w0 = 0.0;
-            u->s2histbuf->buffer[i].y0 = 0.0;
-        }
-        u->s2histbuf->length += growth;
-        pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
-        pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
-    }
+    biquad_resize_rewind_buffer(max_rewind_frames, u->filter_map);
 
-    // shrink to new size
-    if (max_rewind < u->sink->thread_info.max_rewind) {
-        // convert to num samples
-        shrinkage = (u->sink->thread_info.max_rewind - max_rewind) / u->sz_smp;
-        // loop through and move everybody back by shrinkage
-        pa_log_debug("[%d]%s all in samples\n"
-                "\tcur max_rewind = %12lu\n"
-                "\treq max_rewind = %12lu\n"
-                "\tshrinkage =      %12lu\n"
-                "\tidx =            %12lu\n"
-                "\tlength =         %12lu\n",
-                __LINE__, __func__, u->sink->thread_info.max_rewind / u->sz_smp, max_rewind / u->sz_smp, shrinkage,
-                u->s1histbuf->idx, u->s1histbuf->length);
+    pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
+    pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
 
-        // stage 1
-        for (i = 0; i < shrinkage; i++)
-            u->s1histbuf->buffer[i + (u->s1histbuf->length - shrinkage)] = u->s1histbuf->buffer[i];
-        for (i = 0; i < (u->s1histbuf->length - shrinkage); i++)
-            u->s1histbuf->buffer[i] = u->s1histbuf->buffer[i + shrinkage];
-        u->s1histbuf->length -= shrinkage;
-        u->s1histbuf->buffer = realloc(u->s1histbuf->buffer, (sizeof(biquad_data_element) * u->s1histbuf->length));
-        if (u->s1histbuf->idx > shrinkage)
-            u->s1histbuf->idx -= shrinkage;
-        else
-            u->s1histbuf->idx = u->s1histbuf->length - (shrinkage - u->s1histbuf->idx);
-
-        // stage 2
-        for (i = 0; i < shrinkage; i++)
-            u->s2histbuf->buffer[i + (u->s2histbuf->length - shrinkage)] = u->s2histbuf->buffer[i];
-        for (i = 0; i < (u->s2histbuf->length - shrinkage); i++)
-            u->s2histbuf->buffer[i] = u->s2histbuf->buffer[i + shrinkage];
-        u->s2histbuf->length -= shrinkage;
-        u->s2histbuf->buffer = realloc(u->s2histbuf->buffer, (sizeof(biquad_data_element) * u->s2histbuf->length));
-        if (u->s2histbuf->idx > shrinkage)
-            u->s2histbuf->idx -= shrinkage;
-        else
-            u->s2histbuf->idx = u->s2histbuf->length - (shrinkage - u->s2histbuf->idx);
-        pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
-        pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
-    }*/
 }
 
 static void sink_input_update_max_request_cb(pa_sink_input *sink_input, size_t max_request) {
