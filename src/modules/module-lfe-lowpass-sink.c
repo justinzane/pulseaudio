@@ -149,6 +149,32 @@ static void sink_update_requested_latency_cb(pa_sink *sink) {
     pa_sink_input_set_requested_latency_within_thread(u->sink_input, pa_sink_get_requested_latency_within_thread(sink));
 }
 
+/* This seems like a silly thing. A filter should not influence the general volume of the stream.
+ * TODO: Remove me safely. */
+static void sink_set_volume_cb(pa_sink *sink) {
+    struct userdata *u;
+    pa_sink_assert_ref(sink);
+    pa_assert_se(u = sink->userdata);
+
+    if (!PA_SINK_IS_LINKED(pa_sink_get_state(sink)) || !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
+        return;
+
+    pa_sink_input_set_volume(u->sink_input, &sink->real_volume, sink->save_volume, TRUE );
+}
+
+/* This seems like a silly thing. A filter should not influence the general volume of the stream.
+ * TODO: Remove me safely or keep me after discussion with reviewers. */
+static void sink_set_mute_cb(pa_sink *s) {
+    struct userdata *u;
+    pa_sink_assert_ref(s);
+    pa_assert_se(u = s->userdata);
+
+    if (!PA_SINK_IS_LINKED(pa_sink_get_state(s)) || !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
+        return;
+
+    pa_sink_input_set_mute(u->sink_input, s->muted, s->save_muted);
+}
+
 /* filters the audio data from sink_input
  * \return always returns (int)0
  * \note Called from I/O thread context */
@@ -157,15 +183,8 @@ __attribute__((optimize(3))) static int sink_input_pop_cb(pa_sink_input *sink_in
                              pa_memchunk *dst_chunk) {
     struct userdata *u;
     pa_memchunk *src, *dst;
-//  float *cur_sample, *cur_frame, *dst_frame, *dst_sample;
-//    float hp = 0.0f;
-//    float lp = 0.0f;
-//    float ap = 0.0f;
-    size_t framesize, num_frames, chan_idx; //, frm_idx
-//    biquad_data_element bqdtel;
+    size_t framesize, num_frames;
     pa_memchunk tchunk;
-    pa_memchunk deint_chunk, reint_chunk;
-    biquad_map_item_4 *current_map_item;
 
     pa_sink_input_assert_ref(sink_input);
     pa_assert(dst_chunk);
@@ -196,22 +215,8 @@ __attribute__((optimize(3))) static int sink_input_pop_cb(pa_sink_input *sink_in
 
     src = pa_memblock_acquire_chunk(&tchunk);
     dst = pa_memblock_acquire(dst_chunk->memblock);
-    biquad_deinterleave_chunk(src,
-                              &deint_chunk,
-                              &u->sample_spec,
-                              (num_frames * framesize));
-    for (chan_idx = 0; chan_idx < u->sample_spec.channels; chan_idx++) {
-        current_map_item = &u->filter_map->map[chan_idx];
-        pa_biquad_chunk(current_map_item->bqdt1,
-                        current_map_item->bqfs1,
-                        (&deint_chunk + chan_idx*num_frames),
-                        (&reint_chunk + chan_idx*num_frames),
-                        num_frames);
-    }
-    biquad_reinterleave_chunk(&reint_chunk,
-                              dst,
-                              &u->sample_spec,
-                              (num_frames * framesize));
+
+    pa_biquad_chunk_4(u->filter_map, src, dst, num_frames, u->sample_spec.channels);
 
     /* (3) PUT YOUR CODE HERE TO DO SOMETHING WITH THE DATA
     for (frm_idx = 0; frm_idx < num_frames; frm_idx++) {
@@ -273,16 +278,12 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input, size_t rewin
     struct userdata *u;
     size_t amount = 0;
     size_t rewind_frames = 0;
-    size_t rewind_samples = 0;
     size_t max_rewrite = 0;
-    size_t frame_size = 0;
-    unsigned int i = 0;
 
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
 
-    //TODO: call biquad_filter's rewind
-/*
+    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
     if (u->sink->thread_info.rewind_nbytes > 0) {
         max_rewrite = rewind_bytes + pa_memblockq_get_length(u->memblockq);
         amount = PA_MIN(u->sink->thread_info.rewind_nbytes, max_rewrite);
@@ -290,82 +291,11 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input, size_t rewin
 
         if (amount > 0) {
             pa_memblockq_seek(u->memblockq, -(int64_t)amount, PA_SEEK_RELATIVE, TRUE );
-             (5) PUT YOUR CODE HERE TO REWIND YOUR FILTER
-            rewind_samples = amount / pa_sample_size_of_format(u->sample_spec.format);
-            rewind_frames = rewind_samples / u->sample_spec.channels;
-            // add the 2 frame backlog for the biquad
-            rewind_frames += 2;
-            rewind_samples = rewind_frames * u->sample_spec.channels;
-            // check if we have to wrap the ring buffer backwards.
-            if (u->s1histbuf->idx > rewind_samples) {
-                //we're cool, no wrap required
-                u->s1histbuf->idx -= rewind_samples;
-            } else {
-                //doh! gotta wrap.
-                u->s1histbuf->idx = u->s1histbuf->length - (rewind_samples - u->s1histbuf->idx);
-            }
-            frame_size = u->sample_spec.channels * sizeof(biquad_data_element);
-            for (i = 0; i < u->sample_spec.channels; i++) {
-                switch (u->filter_map[i]) {
-                    case LOWPASS: {
-                        // stage 1
-                        u->s1lpdt[i].w2 = u->s1histbuf->buffer[i].w0;
-                        u->s1lpdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
-                        u->s1lpdt[i].w0 = u->s1histbuf->buffer[i + 2 * frame_size].w0;
-                        u->s1lpdt[i].y2 = u->s1histbuf->buffer[i].y0;
-                        u->s1lpdt[i].y1 = u->s1histbuf->buffer[i + frame_size].y0;
-                        u->s1lpdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
-                        // stage 2
-                        u->s2lpdt[i].w2 = u->s1histbuf->buffer[i].w0;
-                        u->s2lpdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
-                        u->s2lpdt[i].w0 = u->s1histbuf->buffer[i + 2 * frame_size].w0;
-                        u->s2lpdt[i].y2 = u->s1histbuf->buffer[i].y0;
-                        u->s2lpdt[i].y1 = u->s1histbuf->buffer[i + frame_size].y0;
-                        u->s2lpdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
-                        break;
-                    }
-                    case HIGHPASS: {
-                        // stage 1
-                        u->s1hpdt[i].w2 = u->s1histbuf->buffer[i].w0;
-                        u->s1hpdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
-                        u->s1hpdt[i].w0 = u->s1histbuf->buffer[i + 2 * frame_size].w0;
-                        u->s1hpdt[i].y2 = u->s1histbuf->buffer[i].y0;
-                        u->s1hpdt[i].y1 = u->s1histbuf->buffer[i + frame_size].y0;
-                        u->s1hpdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
-                        // stage 2
-                        u->s2hpdt[i].w2 = u->s1histbuf->buffer[i].w0;
-                        u->s2hpdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
-                        u->s2hpdt[i].w0 = u->s1histbuf->buffer[i + 2 * frame_size].w0;
-                        u->s2hpdt[i].y2 = u->s1histbuf->buffer[i].y0;
-                        u->s2hpdt[i].y1 = u->s1histbuf->buffer[i + frame_size].y0;
-                        u->s2hpdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
-                        break;
-                    }
-                    case ALLPASS: {
-                        // stage 1
-                        u->s1apdt[i].w2 = u->s1histbuf->buffer[i].w0;
-                        u->s1apdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
-                        u->s1apdt[i].w0 = u->s1histbuf->buffer[i + 2 * frame_size].w0;
-                        u->s1apdt[i].y2 = u->s1histbuf->buffer[i].y0;
-                        u->s1apdt[i].y1 = u->s1histbuf->buffer[i + frame_size].y0;
-                        u->s1apdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
-                        // stage 2
-                        u->s2apdt[i].w2 = u->s1histbuf->buffer[i].w0;
-                        u->s2apdt[i].w1 = u->s1histbuf->buffer[i + frame_size].w0;
-                        u->s2apdt[i].w0 = u->s1histbuf->buffer[i + 2 * frame_size].w0;
-                        u->s2apdt[i].y2 = u->s1histbuf->buffer[i].y0;
-                        u->s2apdt[i].y1 = u->s1histbuf->buffer[i + frame_size].y0;
-                        u->s2apdt[i].y0 = u->s1histbuf->buffer[i + 2 * frame_size].y0;
-                        break;
-                    }
-                }
-            }
-            // move the buffer forward 2 frames so we can write right
-            u->s1histbuf->idx += frame_size;
-            u->s2histbuf->idx += frame_size;
+            /* (5) PUT YOUR CODE HERE TO REWIND YOUR FILTER */
+            rewind_frames = (amount / pa_sample_size_of_format(u->sample_spec.format)) / u->sample_spec.channels;
+            biquad_rewind_filter(rewind_frames, u->filter_map);
         }
     }
-*/
 
     pa_sink_process_rewind(u->sink, amount);
     pa_memblockq_rewind(u->memblockq, rewind_bytes);
@@ -378,6 +308,7 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t ma
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
 
+    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
     if (max_rewind == u->sink->thread_info.max_rewind) {
         pa_log_warn("[%d]%s\n\t called without changing size.\n\tmax_rewind = %lu samples\n",
                     __LINE__, __func__, max_rewind / u->sz_smp);
@@ -442,6 +373,7 @@ static void sink_input_attach_cb(pa_sink_input *input) {
     size_t i;
     pa_sink_input_assert_ref(input);
     pa_assert_se(u = input->userdata);
+    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
 
     pa_sink_set_rtpoll(u->sink, input->sink->thread_info.rtpoll);
     pa_sink_set_latency_range_within_thread(u->sink, input->sink->thread_info.min_latency,
@@ -534,10 +466,24 @@ static void sink_input_moving_cb(pa_sink_input *i, pa_sink *dest) {
     }
 }
 
+static void sink_input_volume_changed_cb(pa_sink_input *i) {
+    struct userdata *u;
+    pa_sink_input_assert_ref(i);
+    pa_assert_se(u = i->userdata);
+    pa_sink_volume_changed(u->sink, &i->volume);
+}
+
+static void sink_input_mute_changed_cb(pa_sink_input *i) {
+    struct userdata *u;
+    pa_sink_input_assert_ref(i);
+    pa_assert_se(u = i->userdata);
+    pa_sink_mute_changed(u->sink, i->muted);
+}
+
 int pa__init(pa_module *module) {
     struct userdata *u;
     pa_channel_map map;
-    biquad_map_item_4 *current_map_item;
+    biquad_map_item_4 *cmi = NULL;
     pa_modargs *ma;
     pa_sink *master = NULL;
     pa_sink_input_new_data sink_input_data;
@@ -613,10 +559,14 @@ int pa__init(pa_module *module) {
                          z ? z : master->name);
     }
 
+// here to make Eclipse CDT stop whining
+#ifndef PA_SINK_SHARE_VOLUME_WITH_MASTER
+#define PA_SINK_SHARE_VOLUME_WITH_MASTER 0x1000000U
+#endif
     u->sink = pa_sink_new(
             module->core,
             &sink_data,
-            (master->flags & (PA_SINK_LATENCY | PA_SINK_DYNAMIC_LATENCY)) | 0);
+            (master->flags & (PA_SINK_LATENCY | PA_SINK_DYNAMIC_LATENCY)) | (0));
     pa_sink_new_data_done(&sink_data);
 
     if (!u->sink) {
@@ -662,8 +612,8 @@ int pa__init(pa_module *module) {
     u->sink_input->state_change = sink_input_state_change_cb;
     u->sink_input->may_move_to = sink_input_may_move_to_cb;
     u->sink_input->moving = sink_input_moving_cb;
-    u->sink_input->volume_changed = NULL;
-    u->sink_input->mute_changed = NULL;
+    u->sink_input->volume_changed = sink_input_volume_changed_cb;
+    u->sink_input->mute_changed = sink_input_mute_changed_cb;
     u->sink_input->userdata = u;
 
     u->sink->input_to_master = u->sink_input;
@@ -697,11 +647,12 @@ int pa__init(pa_module *module) {
      * this before now. <tanuk> */
 
     /* setup filter_map */
-    u->filter_map = malloc(sizeof(biquad_filter_map_4));
-    u->filter_map->num_chans = u->sample_spec.channels;
-    //u->filter_map->map = malloc(sizeof(biquad_map_item_4) * u->sample_spec.channels);
+    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
+    u->filter_map = pa_init_biquad_filter_map_4(u->sample_spec.channels);
+    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
     for (int i = 0; i < u->sample_spec.channels; i++) {
-        current_map_item = &u->filter_map->map[i];
+        cmi = &(u->filter_map->map[i]);
+        fprintf(stderr, "JZ %s:%d:%s\n\tcmi=%p\n", __FILE__, __LINE__, __func__, cmi);
         switch (map.map[i]) {
             case PA_CHANNEL_POSITION_CENTER:
             case PA_CHANNEL_POSITION_REAR_CENTER:
@@ -710,73 +661,29 @@ int pa__init(pa_module *module) {
             case PA_CHANNEL_POSITION_TOP_CENTER:
             case PA_CHANNEL_POSITION_TOP_FRONT_CENTER:
             case PA_CHANNEL_POSITION_TOP_REAR_CENTER:
-                current_map_item->type = HIGHPASS;
-                current_map_item->bqfs1 = malloc(sizeof(biquad_factors));
-                pa_calc_factors(current_map_item->bqfs1, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 1, 2);
-                current_map_item->bqfs2 = malloc(sizeof(biquad_factors));
-                pa_calc_factors(current_map_item->bqfs2, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 2, 2);
-                current_map_item->bqdt1 = malloc(sizeof(biquad_data));
-                pa_init_bqdt(current_map_item->bqdt1, u->sample_spec.channels);
-                current_map_item->bqdt2 = malloc(sizeof(biquad_data));
-                pa_init_bqdt(current_map_item->bqdt2, u->sample_spec.channels);
-                current_map_item->bqhs1 = malloc(sizeof(biquad_history));
-                current_map_item->bqhs1->idx = 0;
-                current_map_item->bqhs1->start = 0;
-                current_map_item->bqhs1->length = 0;
-                current_map_item->bqhs1->buffer = NULL;
-                current_map_item->bqhs2 = malloc(sizeof(biquad_history));
-                current_map_item->bqhs2->idx = 0;
-                current_map_item->bqhs2->start = 0;
-                current_map_item->bqhs2->length = 0;
-                current_map_item->bqhs2->buffer = NULL;
+                cmi->type = HIGHPASS;
+                pa_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 1, 2, 0.0);
+                pa_calc_factors(cmi->bqfs2, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 2, 2, 0.0);
                 break;
             case PA_CHANNEL_POSITION_LFE:
-                current_map_item->type = LOWPASS;
-                current_map_item->bqfs1 = malloc(sizeof(biquad_factors));
-                pa_calc_factors(current_map_item->bqfs1, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 1, 2);
-                current_map_item->bqfs2 = malloc(sizeof(biquad_factors));
-                pa_calc_factors(current_map_item->bqfs2, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 2, 2);
-                current_map_item->bqdt1 = malloc(sizeof(biquad_data));
-                pa_init_bqdt(current_map_item->bqdt1, u->sample_spec.channels);
-                current_map_item->bqdt2 = malloc(sizeof(biquad_data));
-                pa_init_bqdt(current_map_item->bqdt2, u->sample_spec.channels);
-                current_map_item->bqhs1 = malloc(sizeof(biquad_history));
-                current_map_item->bqhs1->idx = 0;
-                current_map_item->bqhs1->start = 0;
-                current_map_item->bqhs1->length = 0;
-                current_map_item->bqhs1->buffer = NULL;
-                current_map_item->bqhs2 = malloc(sizeof(biquad_history));
-                current_map_item->bqhs2->idx = 0;
-                current_map_item->bqhs2->start = 0;
-                current_map_item->bqhs2->length = 0;
-                current_map_item->bqhs2->buffer = NULL;
+                cmi->type = LOWPASS;
+                pa_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 1, 2, 0.0);
+                pa_calc_factors(cmi->bqfs2, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 2, 2, 0.0);
                 break;
             default:
-                current_map_item->type = ALLPASS;
-                current_map_item->bqfs1 = malloc(sizeof(biquad_factors));
-                pa_calc_factors(current_map_item->bqfs1, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 1, 2);
-                current_map_item->bqfs2 = malloc(sizeof(biquad_factors));
-                pa_calc_factors(current_map_item->bqfs1, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 2, 2);
-                current_map_item->bqdt1 = malloc(sizeof(biquad_data));
-                pa_init_bqdt(current_map_item->bqdt1, u->sample_spec.channels);
-                current_map_item->bqdt2 = malloc(sizeof(biquad_data));
-                pa_init_bqdt(current_map_item->bqdt2, u->sample_spec.channels);
-                current_map_item->bqhs1 = malloc(sizeof(biquad_history));
-                current_map_item->bqhs1->idx = 0;
-                current_map_item->bqhs1->start = 0;
-                current_map_item->bqhs1->length = 0;
-                current_map_item->bqhs1->buffer = NULL;
-                current_map_item->bqhs2 = malloc(sizeof(biquad_history));
-                current_map_item->bqhs2->idx = 0;
-                current_map_item->bqhs2->start = 0;
-                current_map_item->bqhs2->length = 0;
-                current_map_item->bqhs2->buffer = NULL;
+                cmi->type = ALLPASS;
+                pa_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 1, 2, 0.0);
+                pa_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 2, 2, 0.0);
         }
     }
+    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
 
     pa_sink_put(u->sink);
+    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
     pa_sink_input_put(u->sink_input);
+    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
     pa_modargs_free(ma);
+    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
     pa_log_debug("Finished lfe-lp.pa__init().\n");
     return 0;
 

@@ -65,23 +65,41 @@
 typedef enum biquad_types {
     LOWPASS,    //!< LOWPASS
     HIGHPASS,   //!< HIGHPASS
-    ALLPASS     //!< ALLPASS
+    ALLPASS,    //!< ALLPASS
+    LOWSHELF,   //!< LOWSHELF
+    HIGHSHELF,  //!< HIGHSHELF  currently unused
+    BANDPASS,   //!< BANDPASS   currently unused
+    NOTCH,      //!< NOTCH      currently unused
+    PEAK,       //!< PEAK       currently unused
 } biquad_types;
 
 /**
  * \struct biquad_factors: holds biquad filter coefficients/factors for a specific filter type
  * \see    http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
  */
+typedef struct biquad_factors_biarray {
+    double a[3];
+    double b[3];
+} biquad_factors_biarray;
+typedef struct biquad_factors_array {
+    double factors[6];
+} biquad_factors_array;
 typedef struct biquad_factors {
     double a0; double a1; double a2;
     double b0; double b1; double b2;
 } biquad_factors;
 
-
 /**
  * \struct biquad_data: holds one iteration of biquad filter history data
  * \see    http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
  */
+typedef struct biquad_data_biarray {
+    double a[3];
+    double b[3];
+} biquad_data_biarray;
+typedef struct biquad_data_array {
+    double factors[6];
+} biquad_data_array;
 typedef struct biquad_data {
     double y0; double y1; double y2;
     double w0; double w1; double w2;
@@ -127,7 +145,7 @@ typedef struct biquad_map_item_4 {
  */
 typedef struct biquad_filter_map_4 {
     size_t            num_chans;            /** < number of channels actually represented */
-    biquad_map_item_4 map[PA_CHANNELS_MAX]; /** < the data */
+    biquad_map_item_4 *map;                 /** < the data */
 } biquad_filter_map_4;
 
 /* ***** Functions ************************************************************************** */
@@ -142,11 +160,11 @@ typedef struct biquad_filter_map_4 {
  * \param   [out]     dst           the filtered sample array
  * \param   [in]      num_samples   the number of sample in the array
  */
-__attribute__((hot)) void pa_biquad_chunk(struct biquad_data *bqdt,
-                                          struct biquad_factors *bqfs,
-                                          float *src,
-                                          float *dst,
-                                          size_t num_samples);
+__attribute__((hot)) void pa_biquad_chunk_4(struct biquad_filter_map_4 *fm,
+                                            float *src,
+                                            float *dst,
+                                            size_t num_frames,
+                                            uint8_t num_chans);
 
 /**
  * \fn      pa_biquad
@@ -159,6 +177,7 @@ __attribute__((hot)) void pa_biquad_chunk(struct biquad_data *bqdt,
  */
 __attribute__((hot)) float pa_biquad(struct biquad_data *bqdt,
                                      struct biquad_factors *bqfs,
+                                     struct biquad_history *bqhs,
                                      float *src);
 
 /**
@@ -170,6 +189,7 @@ __attribute__((hot)) float pa_biquad(struct biquad_data *bqdt,
  *                              'l' for lowpass
  * \param   [in]    stage        1 for first stage, 2 for second, etc.
  * \param   [in]    num_stages   1 for 2nd order, 2 for 4th order, 3 for 6th order, etc.
+ * \param   [in]    gain        gain, in decibels. not used by LP, HP or AP filters.
  * \return  the calculated coefficients/factors
  * \see     http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
  * \note    Algorithm summary.
@@ -199,17 +219,38 @@ __attribute__((hot)) float pa_biquad(struct biquad_data *bqdt,
 void pa_calc_factors(biquad_factors *bqfs,
                                 double sample_rate,
                                 double cutoff_freq,
-                                char type,
+                                biquad_types type,
                                 unsigned int stage,
-                                unsigned int num_stages);
+                                unsigned int num_stages,
+                                double gain);
 /**
  * \fn      pa_init_bqdt
- * \brief   set data elements to 0.0
+ * \brief   allocate and set data elements to 0.0
  * \param [in/out]  bqdt            biquad_data[num_channels]
- * \param [in]      num_channels
  */
-void pa_init_bqdt(biquad_data *bqdt,
-                             size_t num_channels);
+biquad_data *pa_init_bqdt();
+
+/**
+ * \fn      pa_init_bqfs
+ * \brief   allocate and set data elements to 0.0
+ * \param [in/out]  bqfs            biquad_factors
+ */
+biquad_factors *pa_init_bqfs();
+
+/**
+ * \fn      pa_init_biquad_history
+ * \brief   allocates the index, start and length elements. buffer is NULL.
+ * \param   [in/out] bqhs   pointer to the history struct
+ */
+biquad_history *pa_init_biquad_history();
+
+/**
+ * \fn pa_init_biquad_filter_map_4
+ * \brief   allocates map and sents number of channels
+ * \param [in/out]  map         pointer to the str
+ * \param [in]      num_chans   from sample_spec.channels
+ */
+biquad_filter_map_4 *pa_init_biquad_filter_map_4(uint8_t num_chans);
 
 /**
  * \fn      pa_store_history
@@ -218,8 +259,7 @@ void pa_init_bqdt(biquad_data *bqdt,
  * \param [in/out]  bqhist  the history buffer
  * \param [in]      bqdtel  the data to be stored
  */
-void pa_store_history(biquad_history *bqhist,
-                      biquad_data_element *bqdtel);
+void pa_store_history(biquad_history *bqhist, biquad_data_element *bqdtel);
 
 /**
  * \fn biquad_deinterleave_chunk
