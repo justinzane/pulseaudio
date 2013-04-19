@@ -30,31 +30,42 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
-//
+
 #include <stdio.h>
 #include <math.h>
-//#include <time.h>
-//#include <float.h>
-//#include <xmmintrin.h>
-//
-//#include <pulse/gccmacro.h>
-//#include <pulse/xmalloc.h>
-//#include <pulse/def.h>
-//
-//#include <pulsecore/i18n.h>
-//#include <pulsecore/namereg.h>
-//#include <pulsecore/sink.h>
-//#include <pulsecore/module.h>
 #include <pulsecore/core-util.h>
 #include <pulsecore/sample-util.h>
-//#include <pulsecore/modargs.h>
-//#include <pulsecore/log.h>
-//#include <pulsecore/rtpoll.h>
-//#include <pulsecore/ltdl-helper.h>
 
 #define MEMBLOCKQ_MAXLENGTH (16*1024*1024)
-#define MIN_CUTOFF_FREQ 20.0
-#define MAX_CUTOFF_FREQ 500.0
+/**
+ * \def     BIQUAD_MIN_LP_FREQ
+ * \note    the choice of 20.0 Hz was somewhat arbitrarily chosen by the standard minimum of human
+ *          hearing. another factor in this choice is that very few loudspeakers are able to
+ *          reproduce sounds below 20.0 Hz effecively.
+ */
+#define BIQUAD_MIN_LP_FREQ 20.0
+/**
+ * \def     BIQUAD_MAX_LP_FREQ
+ * \note    the choice of 500.0 Hz was very arbitrarily chosen by the author based on the
+ *          assumption that it is silly to send anything over 500Hz to a dedicate subwoofer.
+ *          if this is a bogus assumption, please let the author know.
+ */
+#define BIQUAD_MAX_LP_FREQ 500.0
+/**
+ * \def     BIQUAD_MAX_HP_FREQ
+ * \note    the choice of 20.0 KHz was somewhat arbitrarily chosen by the standard minimum of human
+ *          hearing. another factor in this choice is that very few loudspeakers are able to
+ *          reproduce sounds above 20.0 Hz effecively.
+ */
+#define BIQUAD_MAX_HP_FREQ 20000.0
+/**
+ * \def     BIQUAD_MIN_HP_FREQ
+ * \note    the choice of 500.0 Hz was very arbitrarily chosen by the author based on the
+ *          assumption that it is silly to send anything under 500Hz to a dedicated tweeter.
+ *          if this is a bogus assumption, please let the author know.
+ */
+#define BIQUAD_MIN_HP_FREQ 500.0
+#define BIQUAD_MAX_STAGES 4
 
 /* ***** Data Definitions ******************************************************************* */
 
@@ -104,10 +115,10 @@ typedef struct biquad_data_element {
  * \struct biquad_history  holds the rewind history of filter data
  */
 typedef struct biquad_history {
-    size_t idx;                      /** < \var idx     write index */
-    size_t start;                    /** < \var start   index of oldest element */
-    size_t length;                   /** < \var length  buffer length in samples */
-    pa_biquad_data_element_t *buffer;     /** < \var buffer  rewind buffer */
+    size_t idx;                         /** < \var idx     write index */
+    size_t start;                       /** < \var start   index of oldest element */
+    size_t length;                      /** < \var length  buffer length in samples */
+    pa_biquad_data_element_t *buffer;   /** < \var buffer  rewind buffer */
 } pa_biquad_history_t;
 
 /**
@@ -136,36 +147,41 @@ typedef struct biquad_filter_map_4 {
 /* ***** Functions ************************************************************************** */
 
 /**
- * \fn pa_biquad_array
- * \brief filters an entire chunk of audio frames
- * \param   [in/out]  fm            pointer to a filter map. the history and working data within
- *                                  the map structure get updated during filtering.
- * \param   [in]      src           pointer to the source sample chunk
- * \param   [out]     dst           pointer to the filtered sample chunk
- * \param   [in]      num_frames    the number of frames in the chunks
- * \param   [in]      num_chans     the number of channels in each frame
+ * \fn      pa_biquad_array
+ * \brief   filters an entire chunk [pa_memchunk] of audio frames. requires that the source and
+ *          destination chunks are floats. working data and history data are updated during
+ *          filtering.
  */
 __attribute__((hot)) void pa_biquad_chunk_4(struct biquad_filter_map_4 *fm,
+                                            /** < \param   [in/out] pointer to a filter map.
+                                             * the history and working data within the map
+                                             * structure get updated during filtering. */
                                             float *src,
+                                            /** < \param   [in] pointer to the source sample chunk */
                                             float *dst,
+                                            /** < \param   [out] pointer to the filtered sample chunk */
                                             size_t num_frames,
-                                            uint8_t num_chans);
+                                            /** < \param   [in] the number of frames in the chunks */
+                                            uint8_t num_chans
+                                            /** < \param   [in] the number of channels in each frame */);
 
 /**
  * \fn      pa_biquad
- * \param   [in/out]  bqdt    pointer to the filter's working data
- * \param   [in]      bqfs    pointer to the coefficients
- * \param   [in]      bqhs    pointer to history
- * \param   [in]      src     pointer to the source sample
- * \param   [in]      dst     pointer to the source sample
+ * \brief   the core filtering function. performs a biquad filter on source data based on
+ *          supplied coefficients
  * \note    y0= (b0 * w0 + b1 * w1 + b2 * w2) − (a1 * y1 + a2 * y2);
  * \see     http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
  */
 __attribute__((hot)) void pa_biquad(struct biquad_data *bqdt,
+                                    /** < \param [in/out] pointer to the filter's working data */
                                     struct biquad_factors *bqfs,
+                                    /** < \param [in] pointer to the coefficients */
                                     struct biquad_history *bqhs,
+                                    /** < \param [in] pointer to history */
                                     float *src,
-                                    float *dst);
+                                    /** < \param [in] pointer to the source sample */
+                                    float *dst
+                                    /** < \param [in] pointer to the source sample */);
 
 /**
  * \fn      pa_calc_factors
@@ -202,68 +218,76 @@ __attribute__((hot)) void pa_biquad(struct biquad_data *bqdt,
  * \note:   All coefficients are normalized by dividing by the respective a0.
  * \note:   HighShelf, Notch and Bandpass are not implemented.
  */
-void pa_biquad_calc_factors(pa_biquad_factors_t *bqfs,  /** < \param  [in/out] bqfs: pointer to the pa_biquad_factors struct being calculated */
-                            double sample_rate,         /** < \param  [in] sample_rate: in Hz */
-                            double cutoff_freq,         /** < \param  [in] cutoff_freq: in Hz, also called corner freq. */
-                            pa_biquad_types type,          /** < \param  [in] type: LOWPASS, ALLPASS, LOWSHELF, etc. */
-                            unsigned int stage,         /** < \param  [in] stage: 1 for first stage, 2 for second, etc. */
-                            unsigned int num_stages,    /** < \param  [in] num_stages: 1 for 2nd order, 2 for 4th order, etc.*/
-                            double gain);               /** < \param  [in] gain: gain, in decibels. not used by LP, HP or AP filters.*/
+void pa_biquad_calc_factors(pa_biquad_factors_t *bqfs,
+                            /** < \param  [in/out] pointer to the pa_biquad_factors struct being calculated */
+                            double sample_rate,
+                            /** < \param  [in]  in Hz */
+                            double cutoff_freq,
+                            /** < \param  [in] in Hz, also called corner freq. */
+                            pa_biquad_types type,
+                            /** < \param  [in] LOWPASS, ALLPASS, LOWSHELF, etc. */
+                            unsigned int stage,
+                            /** < \param  [in] 1 for first stage, 2 for second, etc. */
+                            unsigned int num_stages,
+                            /** < \param  [in] 1 for 2nd order, 2 for 4th order, etc.*/
+                            double gain
+                            /** < \param  [in] gain, in dB. not used by LP, HP or AP filters.*/);
 
 /**
- * \fn      pa_init_bqdt
+ * \fn      pa_init_biquad_data
  * \brief   allocate and set data elements to 0.0
  * \return  pointer to a biquad_data structure
  */
-pa_biquad_data_t *pa_init_bqdt(void);
+pa_biquad_data_t *pa_init_biquad_data(void);
 
 /**
- * \fn pa_del_bqdt
+ * \fn pa_del_biquad_data
  * \brief   frees memory allocated to biquad_data structure
- * \param   [in]    bqdt
  */
-void pa_del_bqdt(pa_biquad_data_t *bqdt);
+void pa_del_biquad_data(pa_biquad_data_t *bqdt
+                        /** < pointer to structure to be freed */);
 
 /**
- * \fn      pa_init_bqfs
+ * \fn      pa_init_biquad_factors
  * \brief   allocate and set data elements to 0.0
- * \param [in/out]  bqfs            biquad_factors
+ * \return  pointer to a biquad_factors structure
  */
-pa_biquad_factors_t *pa_init_bqfs(void);
+pa_biquad_factors_t *pa_init_biquad_factors(void);
 
 /**
  * \fn      pa_del_bqfs
  * \brief   frees memory allocated to biquad_factors structure
- * \param   [in]    bqdt
  */
-void pa_del_bqfs(pa_biquad_factors_t *bqfs);
+void pa_del_biquad_factors(pa_biquad_factors_t *bqfs
+                           /** < pointer to structure to be freed */);
 
 /**
  * \fn      pa_init_biquad_history
  * \brief   allocates the index, start and length elements. buffer is NULL.
- * \param   [in/out] bqhs   pointer to the history struct
+ * \return  pointer to a biquad_history struct
  */
 pa_biquad_history_t *pa_init_biquad_history(void);
 
 /**
  * \fn      pa_del_biquad_history
  * \brief   frees memory allocated to biquad_history structure
- * \param   [in]    bqhs
  */
-void pa_del_biquad_history(pa_biquad_history_t *bqhs);
+void pa_del_biquad_history(pa_biquad_history_t *bqhs
+                           /** < pointer to structure to be freed */);
 
 /**
- * \fn pa_init_biquad_filter_map_4
+ * \fn      pa_init_biquad_filter_map_4
  * \brief   allocates map and sents number of channels
- * \param [in/out]  map         pointer to the str
  * \param [in]      num_chans   from sample_spec.channels
+ * \returns pointer to biquad_filter_map_4
  */
-pa_biquad_filter_map_4 *pa_init_biquad_filter_map_4(uint8_t num_chans);
+pa_biquad_filter_map_4 *pa_init_biquad_filter_map_4(uint8_t num_chans
+                                                    /** < \param [in] from sample_spec.channels */);
 
 /**
  * \fn      pa_del_filter_map_4
  * \brief   frees memory allocated to biquad_filter_map_4 structure
- * \param   [in]    bqfm
+ * \param   [in]    bqfm    pointer to structure to be freed
  */
 void pa_del_biquad_filter_map_4(pa_biquad_filter_map_4 *bqfm);
 

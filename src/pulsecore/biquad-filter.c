@@ -81,7 +81,8 @@ __attribute__((hot)) void pa_biquad(struct biquad_data *bqdt,
 }
 
 void pa_biquad_calc_factors(pa_biquad_factors_t *bqfs, double sample_rate, double cutoff_freq,
-                     pa_biquad_types type, unsigned int stage, unsigned int num_stages, double gain) {
+                            pa_biquad_types type, unsigned int stage, unsigned int num_stages,
+                            double gain) {
     double w0, alpha, A;
 
     /* \see http://www.linkwitzlab.com/filters.htm */
@@ -95,7 +96,7 @@ void pa_biquad_calc_factors(pa_biquad_factors_t *bqfs, double sample_rate, doubl
 
     /* TODO: validate input args */
     pa_assert(stage <= num_stages);
-    pa_assert(num_stages < 4);
+    pa_assert(num_stages < BIQUAD_MAX_STAGES);
     pa_assert(stage > 0);
 
     A = pow(10.0,(gain/40.0));
@@ -119,33 +120,33 @@ void pa_biquad_calc_factors(pa_biquad_factors_t *bqfs, double sample_rate, doubl
 
     switch(type) {
         case ALLPASS: {
-            (*bqfs).a0 = (1.0 + alpha);
-            (*bqfs).a1 = (-2.0 * cos(w0)) / (*bqfs).a0;
-            (*bqfs).a2 = (1.0 - alpha) / (*bqfs).a0;
-            (*bqfs).b0 = (1.0 - alpha) / (*bqfs).a0;
-            (*bqfs).b1 = (-2.0 * cos(w0)) / (*bqfs).a0;
-            (*bqfs).b2 = (1.0 + alpha) / (*bqfs).a0;
-            (*bqfs).a0 = 1.0;
+            bqfs->a0 = ( 1.0 + alpha);
+            bqfs->a1 = (-2.0 * cos(w0)) / bqfs->a0;
+            bqfs->a2 = ( 1.0 - alpha)   / bqfs->a0;
+            bqfs->b0 = ( 1.0 - alpha)   / bqfs->a0;
+            bqfs->b1 = (-2.0 * cos(w0)) / bqfs->a0;
+            bqfs->b2 = ( 1.0 + alpha)   / bqfs->a0;
+            bqfs->a0 = 1.0;
             break;
         }
         case HIGHPASS: {
-            (*bqfs).a0 = (1.0 + alpha);
-            (*bqfs).a1 = (-2.0 * cos(w0)) / (*bqfs).a0;
-            (*bqfs).a2 = (1.0 - alpha) / (*bqfs).a0;
-            (*bqfs).b0 = ( (1.0 + cos(w0)) / 2.0) / (*bqfs).a0;
-            (*bqfs).b1 = (-1.0 * (1.0 + cos(w0))) / (*bqfs).a0;
-            (*bqfs).b2 = ( (1.0 + cos(w0)) / 2.0) / (*bqfs).a0;
-            (*bqfs).a0 = 1.0;
+            bqfs->a0 = ( 1.0 + alpha);
+            bqfs->a1 = (-2.0 * cos(w0)) / bqfs->a0;
+            bqfs->a2 = ( 1.0 - alpha)   / bqfs->a0;
+            bqfs->b0 = ( (1.0 +       cos(w0)) / 2.0) / bqfs->a0;
+            bqfs->b1 = (-1.0 * (1.0 + cos(w0))      ) / bqfs->a0;
+            bqfs->b2 = ( (1.0 +       cos(w0)) / 2.0) / bqfs->a0;
+            bqfs->a0 = 1.0;
             break;
         }
         case LOWPASS: {
-            (*bqfs).a0 = (1.0 + alpha);
-            (*bqfs).a1 = (-2.0 * cos(w0)) / (*bqfs).a0;
-            (*bqfs).a2 = (1.0 - alpha) / (*bqfs).a0;
-            (*bqfs).b0 = ( (1.0 - cos(w0)) / 2.0) / (*bqfs).a0;
-            (*bqfs).b1 = ( (1.0 - cos(w0))) / (*bqfs).a0;
-            (*bqfs).b2 = ( (1.0 - cos(w0)) / 2.0) / (*bqfs).a0;
-            (*bqfs).a0 = 1.0;
+            bqfs->a0 = ( 1.0 + alpha);
+            bqfs->a1 = (-2.0 * cos(w0)) / bqfs->a0;
+            bqfs->a2 = ( 1.0 - alpha)   / bqfs->a0;
+            bqfs->b0 = ( (1.0 - cos(w0)) / 2.0) / bqfs->a0;
+            bqfs->b1 = ( (1.0 - cos(w0))      ) / bqfs->a0;
+            bqfs->b2 = ( (1.0 - cos(w0)) / 2.0) / bqfs->a0;
+            bqfs->a0 = 1.0;
             break;
         }
         case LOWSHELF: {
@@ -167,31 +168,25 @@ void pa_biquad_calc_factors(pa_biquad_factors_t *bqfs, double sample_rate, doubl
     pa_log_info("%d:%s\n", __LINE__, __func__);
     pa_log_info("\tw0=%0.8f, alpha=%0.8f", w0, alpha);
     pa_log_info("\tbiquad_factors\n\t[b0, b1, b2]=[%0.8f, %0.8f, %0.8f]\n\t[a0, a1, a2]=[%0.8f, %0.8f, %0.8f]\n",
-                (*bqfs).b0, (*bqfs).b1, (*bqfs).b2, (*bqfs).a0, (*bqfs).a1, (*bqfs).a2);
+                bqfs->b0, bqfs->b1, bqfs->b2, bqfs->a0, bqfs->a1, bqfs->a2);
 
 }
 
-pa_biquad_data_t *pa_init_bqdt() {
+pa_biquad_data_t *pa_init_biquad_data() {
     pa_biquad_data_t *bqdt = calloc(1, sizeof(pa_biquad_data_t));
-
-    fprintf(stderr, "JZ %s:%d:%s\n\tbqdt = %p\n", __FILE__, __LINE__, __func__, bqdt);
-    bqdt->w0 = 0.0; bqdt->w1 = 0.0; bqdt->w2 = 0.0;
-    bqdt->y0 = 0.0; bqdt->y1 = 0.0; bqdt->y2 = 0.0;
     return bqdt;
 }
 
-void pa_del_bqdt(pa_biquad_data_t *bqdt) {
+void pa_del_biquad_data(pa_biquad_data_t *bqdt) {
     free(bqdt);
 }
 
-pa_biquad_factors_t *pa_init_bqfs() {
-    pa_biquad_factors_t *bqfs = malloc(sizeof(pa_biquad_factors_t));
-    bqfs->a0 = 0.0; bqfs->a1 = 0.0; bqfs->a2 = 0.0;
-    bqfs->b0 = 0.0; bqfs->b1 = 0.0; bqfs->b2 = 0.0;
+pa_biquad_factors_t *pa_init_biquad_factors() {
+    pa_biquad_factors_t *bqfs = calloc(1, sizeof(pa_biquad_factors_t));
     return bqfs;
 }
 
-void pa_del_bqfs(pa_biquad_factors_t *bqfs) {
+void pa_del_biquad_factors(pa_biquad_factors_t *bqfs) {
     free(bqfs);
 }
 
@@ -216,10 +211,10 @@ pa_biquad_filter_map_4 *pa_init_biquad_filter_map_4(uint8_t num_chans) {
     map->map = calloc(num_chans, sizeof(pa_biquad_map_item_4));
 
     for (i = 0; i < num_chans; i++) {
-        map->map[i].bqdt1 = pa_init_bqdt();
-        map->map[i].bqdt2 = pa_init_bqdt();
-        map->map[i].bqfs1 = pa_init_bqfs();
-        map->map[i].bqfs2 = pa_init_bqfs();
+        map->map[i].bqdt1 = pa_init_biquad_data();
+        map->map[i].bqdt2 = pa_init_biquad_data();
+        map->map[i].bqfs1 = pa_init_biquad_factors();
+        map->map[i].bqfs2 = pa_init_biquad_factors();
         map->map[i].bqhs1 = pa_init_biquad_history();
         map->map[i].bqhs2 = pa_init_biquad_history();
     }
@@ -229,10 +224,10 @@ pa_biquad_filter_map_4 *pa_init_biquad_filter_map_4(uint8_t num_chans) {
 void pa_del_biquad_filter_map_4(pa_biquad_filter_map_4 *bqfm) {
     size_t i = 0;
     for (i = 0; i < bqfm->num_chans; i++) {
-        pa_del_bqdt(bqfm->map[i].bqdt1);
-        pa_del_bqdt(bqfm->map[i].bqdt2);
-        pa_del_bqfs(bqfm->map[i].bqfs1);
-        pa_del_bqfs(bqfm->map[i].bqfs2);
+        pa_del_biquad_data(bqfm->map[i].bqdt1);
+        pa_del_biquad_data(bqfm->map[i].bqdt2);
+        pa_del_biquad_factors(bqfm->map[i].bqfs1);
+        pa_del_biquad_factors(bqfm->map[i].bqfs2);
         pa_del_biquad_history(bqfm->map[i].bqhs1);
         pa_del_biquad_history(bqfm->map[i].bqhs2);
     }
@@ -334,8 +329,6 @@ void pa_biquad_resize_rewind_buffer(size_t rewind_frames,
     pa_biquad_map_item_4 *cmi;
     size_t shrinkage = 0;
     size_t i = 0;
-
-    fprintf(stderr,"Beginning biquad_resize_rewind_buffer. %lu, %p\n", rewind_frames, filter_map);
 
     /* We must keep at least 3 samples to repopulate biquad_data */
     rewind_frames += 2;

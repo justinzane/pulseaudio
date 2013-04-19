@@ -78,13 +78,6 @@ struct userdata {
     pa_sample_spec sample_spec;
     size_t sz_smp, sz_frm, sz_bqf;
     double lpfreq;                               /* corner/cutoff frequency, user defined */
-//    biquad_factors *s1lpfs, *s1hpfs, *s1apfs;    /* lowpass, highpass and allpass coefficients */
-//    biquad_factors *s2lpfs, *s2hpfs, *s2apfs;    /* lowpass, highpass and allpass coefficients */
-//    biquad_data *s1lpdt, *s1hpdt, *s1apdt;       /* history data for the various filters stage 1*/
-//    biquad_history *s1histbuf;                   /* rewind buffer for biquad_data stage 1*/
-//    biquad_data *s2lpdt, *s2hpdt, *s2apdt;       /* history data for the various filters stage 2*/
-//    biquad_history *s2histbuf;                   /* rewind buffer for biquad_data stage 2*/
-//    biquad_types filter_map[PA_CHANNELS_MAX];    /* map of channels index to biquad_types */
     pa_biquad_filter_map_4 *filter_map;
 };
 
@@ -238,7 +231,6 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input, size_t rewin
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
 
-    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
     if (u->sink->thread_info.rewind_nbytes > 0) {
         max_rewrite = rewind_bytes + pa_memblockq_get_length(u->memblockq);
         amount = PA_MIN(u->sink->thread_info.rewind_nbytes, max_rewrite);
@@ -263,7 +255,6 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t ma
     pa_sink_input_assert_ref(sink_input);
     pa_assert_se(u = sink_input->userdata);
 
-    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
     if (max_rewind == u->sink->thread_info.max_rewind) {
         pa_log_warn("[%d]%s\n\t called without changing size.\n\tmax_rewind = %lu samples\n",
                     __LINE__, __func__, max_rewind / u->sz_smp);
@@ -328,7 +319,6 @@ static void sink_input_attach_cb(pa_sink_input *input) {
     size_t i;
     pa_sink_input_assert_ref(input);
     pa_assert_se(u = input->userdata);
-    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
 
     pa_sink_set_rtpoll(u->sink, input->sink->thread_info.rtpoll);
     pa_sink_set_latency_range_within_thread(u->sink, input->sink->thread_info.min_latency,
@@ -336,8 +326,6 @@ static void sink_input_attach_cb(pa_sink_input *input) {
     pa_sink_set_fixed_latency_within_thread(u->sink, input->sink->thread_info.fixed_latency);
     pa_sink_set_max_request_within_thread(u->sink, pa_sink_input_get_max_request(input));
 
-    /* Alloc the rewind buffers */
-    //TODO: Move allocation of rewind buffer into biquad-filter.c/h
     for (i = 0; i < u->sample_spec.channels; i++) {
         cmi = &u->filter_map->map[i];
         if ( (u->sink->thread_info.max_rewind / u->sz_frm) < MIN_MAX_REWIND_FRAMES) {
@@ -462,15 +450,15 @@ int pa__init(pa_module *module) {
 
     // get, validate and assign lowpass cutoff freq
     u->lpfreq = atof(pa_modargs_get_value(ma, "lpfreq", "100.0"));
-    if (u->lpfreq < MIN_CUTOFF_FREQ) {
+    if (u->lpfreq < BIQUAD_MIN_LP_FREQ) {
         pa_log_error("[%d]%s lpfreq must be between %f and %f.",
-                     __LINE__, __func__, MIN_CUTOFF_FREQ, MAX_CUTOFF_FREQ);
-        u->lpfreq = MIN_CUTOFF_FREQ;
+                     __LINE__, __func__, BIQUAD_MIN_LP_FREQ, BIQUAD_MAX_LP_FREQ);
+        u->lpfreq = BIQUAD_MIN_LP_FREQ;
     }
-    if (u->lpfreq > MAX_CUTOFF_FREQ) {
+    if (u->lpfreq > BIQUAD_MAX_LP_FREQ) {
         pa_log_error("[%d]%s lpfreq must be between %f and %f.",
-                     __LINE__, __func__, MIN_CUTOFF_FREQ, MAX_CUTOFF_FREQ);
-        u->lpfreq = MAX_CUTOFF_FREQ;
+                     __LINE__, __func__, BIQUAD_MIN_LP_FREQ, BIQUAD_MAX_LP_FREQ);
+        u->lpfreq = BIQUAD_MAX_LP_FREQ;
     }
     pa_log_info("[%d]%s lpfreq=%f\n", __LINE__, __func__, u->lpfreq);
 
@@ -602,12 +590,9 @@ int pa__init(pa_module *module) {
      * this before now. <tanuk> */
 
     /* setup filter_map */
-    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
     u->filter_map = pa_init_biquad_filter_map_4(u->sample_spec.channels);
-    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
     for (int i = 0; i < u->sample_spec.channels; i++) {
         cmi = &(u->filter_map->map[i]);
-        fprintf(stderr, "JZ %s:%d:%s\n\tcmi=%p\n", __FILE__, __LINE__, __func__, cmi);
         switch (map.map[i]) {
             case PA_CHANNEL_POSITION_CENTER:
             case PA_CHANNEL_POSITION_REAR_CENTER:
@@ -631,14 +616,10 @@ int pa__init(pa_module *module) {
                 pa_biquad_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 2, 2, 0.0);
         }
     }
-    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
 
     pa_sink_put(u->sink);
-    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
     pa_sink_input_put(u->sink_input);
-    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
     pa_modargs_free(ma);
-    fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
     pa_log_debug("Finished lfe-lp.pa__init().\n");
     return 0;
 
