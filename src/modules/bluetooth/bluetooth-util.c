@@ -1800,33 +1800,71 @@ pa_hook* pa_bluetooth_discovery_hook(pa_bluetooth_discovery *y, pa_bluetooth_hoo
     return &y->hooks[hook];
 }
 
-const char*pa_bluetooth_get_form_factor(uint32_t class) {
-    unsigned i;
-    const char *r;
+pa_bt_form_factor_t pa_bluetooth_get_form_factor(uint32_t class) {
+    unsigned major, minor;
+    pa_bt_form_factor_t r;
 
-    static const char * const table[] = {
-        [1] = "headset",
-        [2] = "hands-free",
-        [4] = "microphone",
-        [5] = "speaker",
-        [6] = "headphone",
-        [7] = "portable",
-        [8] = "car",
-        [10] = "hifi"
+    static const pa_bt_form_factor_t table[] = {
+        [1] = PA_BT_FORM_FACTOR_HEADSET,
+        [2] = PA_BT_FORM_FACTOR_HANDSFREE,
+        [4] = PA_BT_FORM_FACTOR_MICROPHONE,
+        [5] = PA_BT_FORM_FACTOR_SPEAKER,
+        [6] = PA_BT_FORM_FACTOR_HEADPHONE,
+        [7] = PA_BT_FORM_FACTOR_PORTABLE,
+        [8] = PA_BT_FORM_FACTOR_CAR,
+        [10] = PA_BT_FORM_FACTOR_HIFI
     };
 
-    if (((class >> 8) & 31) != 4)
-        return NULL;
+    /*
+     * See Bluetooth Assigned Numbers:
+     * https://www.bluetooth.org/Technical/AssignedNumbers/baseband.htm
+     */
+    major = (class >> 8) & 0x1F;
+    minor = (class >> 2) & 0x3F;
 
-    if ((i = (class >> 2) & 63) >= PA_ELEMENTSOF(table))
-        r =  NULL;
-    else
-        r = table[i];
+    switch (major) {
+        case 2:
+            return PA_BT_FORM_FACTOR_PHONE;
+        case 4:
+            break;
+        default:
+            pa_log_debug("Unknown Bluetooth major device class %u", major);
+            return PA_BT_FORM_FACTOR_UNKNOWN;
+    }
+
+    r = minor < PA_ELEMENTSOF(table) ? table[minor] : PA_BT_FORM_FACTOR_UNKNOWN;
 
     if (!r)
-        pa_log_debug("Unknown Bluetooth minor device class %u", i);
+        pa_log_debug("Unknown Bluetooth minor device class %u", minor);
 
     return r;
+}
+
+const char *pa_bt_form_factor_to_string(pa_bt_form_factor_t ff) {
+    switch (ff) {
+        case PA_BT_FORM_FACTOR_UNKNOWN:
+            return "unknown";
+        case PA_BT_FORM_FACTOR_HEADSET:
+            return "headset";
+        case PA_BT_FORM_FACTOR_HANDSFREE:
+            return "hands-free";
+        case PA_BT_FORM_FACTOR_MICROPHONE:
+            return "microphone";
+        case PA_BT_FORM_FACTOR_SPEAKER:
+            return "speaker";
+        case PA_BT_FORM_FACTOR_HEADPHONE:
+            return "headphone";
+        case PA_BT_FORM_FACTOR_PORTABLE:
+            return "portable";
+        case PA_BT_FORM_FACTOR_CAR:
+            return "car";
+        case PA_BT_FORM_FACTOR_HIFI:
+            return "hifi";
+        case PA_BT_FORM_FACTOR_PHONE:
+            return "phone";
+    }
+
+    pa_assert_not_reached();
 }
 
 char *pa_bluetooth_cleanup_name(const char *name) {

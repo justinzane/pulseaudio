@@ -41,13 +41,16 @@ endif
 #     Compiler/linker flags       #
 ###################################
 
-AM_CFLAGS = \
+AM_CPPFLAGS = \
 	-I$(top_srcdir)/src \
 	-I$(top_srcdir)/src/modules \
 	-I$(top_builddir)/src/modules \
-	$(PTHREAD_CFLAGS) \
 	-DPA_ALSA_PATHS_DIR=\"$(alsapathsdir)\" \
 	-DPA_ALSA_PROFILE_SETS_DIR=\"$(alsaprofilesetsdir)\"
+AM_CFLAGS = \
+	$(PTHREAD_CFLAGS) \
+	-DPA_SRCDIR=\"$(abs_srcdir)\" \
+	-DPA_BUILDDIR=\"$(abs_builddir)\"
 AM_CXXFLAGS = $(AM_CFLAGS)
 SERVER_CFLAGS = -D__INCLUDED_FROM_PULSE_AUDIO
 
@@ -231,7 +234,6 @@ TESTS_default = \
 		utf8-test \
 		format-test \
 		get-binary-name-test \
-		ipacl-test \
 		hook-list-test \
 		memblock-test \
 		asyncq-test \
@@ -250,6 +252,7 @@ TESTS_default = \
 		mix-special-test
 
 TESTS_norun = \
+		ipacl-test \
 		mcalign-test \
 		pacat-simple \
 		parec-simple \
@@ -289,7 +292,7 @@ TESTS_default += \
 		mainloop-test-glib
 endif
 
-if HAVE_GTK20
+if HAVE_GTK30
 TESTS_norun += \
 		gtk-test
 endif
@@ -297,6 +300,8 @@ endif
 if HAVE_ALSA
 TESTS_norun += \
 		alsa-time-test
+TESTS_default += \
+		alsa-mixer-path-test
 endif
 
 if HAVE_TESTS
@@ -536,14 +541,19 @@ sigbus_test_CFLAGS = $(AM_CFLAGS) $(LIBCHECK_CFLAGS)
 sigbus_test_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS) $(LIBCHECK_LIBS)
 
 gtk_test_SOURCES = tests/gtk-test.c
-gtk_test_LDADD = $(AM_LDADD) $(GTK20_LIBS) libpulse-mainloop-glib.la libpulse.la
-gtk_test_CFLAGS = $(AM_CFLAGS) $(GTK20_CFLAGS)
+gtk_test_LDADD = $(AM_LDADD) $(GTK30_LIBS) libpulse-mainloop-glib.la libpulse.la
+gtk_test_CFLAGS = $(AM_CFLAGS) $(GTK30_CFLAGS)
 gtk_test_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS)
 
 alsa_time_test_SOURCES = tests/alsa-time-test.c
 alsa_time_test_LDADD = $(AM_LDADD) $(ASOUNDLIB_LIBS)
 alsa_time_test_CFLAGS = $(AM_CFLAGS) $(ASOUNDLIB_CFLAGS)
 alsa_time_test_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS)
+
+alsa_mixer_path_test_SOURCES = tests/alsa-mixer-path-test.c
+alsa_mixer_path_test_CFLAGS = $(AM_CFLAGS) $(LIBCHECK_CFLAGS) $(ASOUNDLIB_CFLAGS)
+alsa_mixer_path_test_LDADD = $(AM_LDADD) libpulsecore-@PA_MAJORMINOR@.la libpulse.la libpulsecommon-@PA_MAJORMINOR@.la libalsa-util.la
+alsa_mixer_path_test_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS) $(LIBCHECK_LIBS)
 
 usergroup_test_SOURCES = tests/usergroup-test.c
 usergroup_test_LDADD = $(AM_LDADD) libpulsecore-@PA_MAJORMINOR@.la libpulse.la libpulsecommon-@PA_MAJORMINOR@.la
@@ -666,7 +676,7 @@ libpulsecommon_@PA_MAJORMINOR@_la_LDFLAGS += $(X11_LIBS)
 endif
 
 # proplist-util.h uses these header files, but not the library itself!
-libpulsecommon_@PA_MAJORMINOR@_la_CFLAGS += $(GLIB20_CFLAGS) $(GTK20_CFLAGS)
+libpulsecommon_@PA_MAJORMINOR@_la_CFLAGS += $(GLIB20_CFLAGS) $(GTK30_CFLAGS)
 
 ## Please note that libpulsecommon implicitly also depends on<
 ## libpulse! i.e. we have a cyclic dependancy here. Which is intended
@@ -1194,6 +1204,7 @@ dist_alsapaths_DATA = \
 		modules/alsa/mixer/paths/analog-input-dock-mic.conf \
 		modules/alsa/mixer/paths/analog-input-front-mic.conf \
 		modules/alsa/mixer/paths/analog-input-headphone-mic.conf \
+		modules/alsa/mixer/paths/analog-input-headset-mic.conf \
 		modules/alsa/mixer/paths/analog-input-internal-mic.conf \
 		modules/alsa/mixer/paths/analog-input-internal-mic-always.conf \
 		modules/alsa/mixer/paths/analog-input-rear-mic.conf \
@@ -1598,7 +1609,7 @@ module_remap_source_la_LDFLAGS = $(MODULE_LDFLAGS)
 module_remap_source_la_LIBADD = $(MODULE_LIBADD)
 
 module_ladspa_sink_la_SOURCES = modules/module-ladspa-sink.c modules/ladspa.h
-module_ladspa_sink_la_CFLAGS = -DLADSPA_PATH=\"$(libdir)/ladspa:/usr/local/lib/ladspa:/usr/lib/ladspa:/usr/local/lib64/ladspa:/usr/lib64/ladspa\" $(AM_CFLAGS)
+module_ladspa_sink_la_CFLAGS = -DLADSPA_PATH=\"$(libdir)/ladspa:/usr/local/lib/ladspa:/usr/lib/ladspa:/usr/local/lib64/ladspa:/usr/lib64/ladspa\" $(AM_CFLAGS) $(SERVER_CFLAGS)
 module_ladspa_sink_la_LDFLAGS = $(MODULE_LDFLAGS)
 module_ladspa_sink_la_LIBADD = $(MODULE_LIBADD) $(LIBLTDL)
 
@@ -1969,8 +1980,8 @@ module_udev_detect_la_CFLAGS = $(AM_CFLAGS) $(UDEV_CFLAGS)
 
 module_console_kit_la_SOURCES = modules/module-console-kit.c
 module_console_kit_la_LDFLAGS = $(MODULE_LDFLAGS)
-module_console_kit_la_LIBADD = $(MODULE_LIBADD) $(DBUS_LIBS) $(SYSTEMD_LIBS)
-module_console_kit_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS) $(SYSTEMD_CFLAGS)
+module_console_kit_la_LIBADD = $(MODULE_LIBADD) $(DBUS_LIBS)
+module_console_kit_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS)
 
 module_systemd_login_la_SOURCES = modules/module-systemd-login.c
 module_systemd_login_la_LDFLAGS = $(MODULE_LDFLAGS)

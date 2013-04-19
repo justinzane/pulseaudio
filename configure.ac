@@ -40,19 +40,15 @@ AC_SUBST(PA_MINOR, pa_minor)
 AC_SUBST(PA_MAJORMINOR, pa_major.pa_minor)
 
 AC_SUBST(PA_API_VERSION, 12)
-AC_SUBST(PA_PROTOCOL_VERSION, 27)
+AC_SUBST(PA_PROTOCOL_VERSION, 28)
 
 # The stable ABI for client applications, for the version info x:y:z
 # always will hold y=z
-AC_SUBST(LIBPULSE_VERSION_INFO, [15:3:15])
+AC_SUBST(LIBPULSE_VERSION_INFO, [16:0:16])
 
 # A simplified, synchronous, ABI-stable interface for client
 # applications, for the version info x:y:z always will hold y=z
-AC_SUBST(LIBPULSE_SIMPLE_VERSION_INFO, [0:3:0])
-
-# The ABI-stable network browsing interface for client applications,
-# for the version info x:y:z always will hold y=z
-AC_SUBST(LIBPULSE_BROWSE_VERSION_INFO, [1:1:1])
+AC_SUBST(LIBPULSE_SIMPLE_VERSION_INFO, [0:4:0])
 
 # The ABI-stable GLib adapter for client applications, for the version
 # info x:y:z always will hold y=z
@@ -842,22 +838,22 @@ AC_SUBST(HAVE_GLIB20)
 AM_CONDITIONAL([HAVE_GLIB20], [test "x$HAVE_GLIB20" = x1])
 AS_IF([test "x$HAVE_GLIB20" = "x1"], AC_DEFINE([HAVE_GLIB], 1, [Have GLIB?]))
 
-#### GTK2 support (optional) ####
+#### GTK3 support (optional) ####
 
-AC_ARG_ENABLE([gtk2],
-    AS_HELP_STRING([--disable-gtk2],[Disable optional Gtk+ 2 support]))
+AC_ARG_ENABLE([gtk3],
+    AS_HELP_STRING([--disable-gtk3],[Disable optional Gtk+ 3 support]))
 
-AS_IF([test "x$enable_gtk2" != "xno"],
-    [PKG_CHECK_MODULES(GTK20, [ gtk+-2.0 >= 2.4.0 ], HAVE_GTK20=1, HAVE_GTK20=0)],
-    HAVE_GTK20=0)
+AS_IF([test "x$enable_gtk3" != "xno"],
+    [PKG_CHECK_MODULES(GTK30, [ gtk+-3.0 ], HAVE_GTK30=1, HAVE_GTK30=0)],
+    HAVE_GTK30=0)
 
-AS_IF([test "x$enable_gtk2" = "xyes" && test "x$HAVE_GTK20" = "x0"],
-    [AC_MSG_ERROR([*** Gtk+ 2 support not found])])
+AS_IF([test "x$enable_gtk3" = "xyes" && test "x$HAVE_GTK30" = "x0"],
+    [AC_MSG_ERROR([*** Gtk+ 3 support not found])])
 
-AC_SUBST(GTK20_CFLAGS)
-AC_SUBST(GTK20_LIBS)
-AM_CONDITIONAL([HAVE_GTK20], [test "x$HAVE_GTK20" = x1])
-AS_IF([test "x$HAVE_GTK20" = "x1"], AC_DEFINE([HAVE_GTK], 1, [Have GTK?]))
+AC_SUBST(GTK30_CFLAGS)
+AC_SUBST(GTK30_LIBS)
+AM_CONDITIONAL([HAVE_GTK30], [test "x$HAVE_GTK30" = x1])
+AS_IF([test "x$HAVE_GTK30" = "x1"], AC_DEFINE([HAVE_GTK], 1, [Have GTK?]))
 
 #### GConf support (optional) ####
 
@@ -1163,7 +1159,7 @@ AC_ARG_ENABLE([systemd],
     AS_HELP_STRING([--disable-systemd],[Disable optional systemd support]))
 
 AS_IF([test "x$enable_systemd" != "xno"],
-    [PKG_CHECK_MODULES(SYSTEMD, [ libsystemd-login libsystemd-daemon ], HAVE_SYSTEMD=1, HAVE_SYSTEMD=0)],
+    [PKG_CHECK_MODULES(SYSTEMD, [ libsystemd-login ], HAVE_SYSTEMD=1, HAVE_SYSTEMD=0)],
     HAVE_SYSTEMD=0)
 
 AS_IF([test "x$enable_systemd" = "xyes" && test "x$HAVE_SYSTEMD" = "x0"],
@@ -1238,8 +1234,6 @@ AC_SUBST(PA_SOEXT, [.so])
 
 AC_SUBST(pulseconfdir, ["${sysconfdir}/pulse"])
 AX_DEFINE_DIR(PA_DEFAULT_CONFIG_DIR, pulseconfdir, [Location of configuration files])
-
-AC_DEFINE_UNQUOTED(PA_BUILDDIR, "${ac_pwd}/src", [Location of uninstalled binaries])
 
 #### Mac OSX specific stuff #####
 
@@ -1411,7 +1405,7 @@ AS_IF([test "x$HAVE_COREAUDIO" = "x1"], ENABLE_COREAUDIO=yes, ENABLE_COREAUDIO=n
 AS_IF([test "x$HAVE_SOLARIS" = "x1"], ENABLE_SOLARIS=yes, ENABLE_SOLARIS=no)
 AS_IF([test "x$HAVE_WAVEOUT" = "x1"], ENABLE_WAVEOUT=yes, ENABLE_WAVEOUT=no)
 AS_IF([test "x$HAVE_GLIB20" = "x1"], ENABLE_GLIB20=yes, ENABLE_GLIB20=no)
-AS_IF([test "x$HAVE_GTK20" = "x1"], ENABLE_GTK20=yes, ENABLE_GTK20=no)
+AS_IF([test "x$HAVE_GTK30" = "x1"], ENABLE_GTK30=yes, ENABLE_GTK30=no)
 AS_IF([test "x$HAVE_GCONF" = "x1"], ENABLE_GCONF=yes, ENABLE_GCONF=no)
 AS_IF([test "x$HAVE_AVAHI" = "x1"], ENABLE_AVAHI=yes, ENABLE_AVAHI=no)
 AS_IF([test "x$HAVE_JACK" = "x1"], ENABLE_JACK=yes, ENABLE_JACK=no)
@@ -1464,7 +1458,7 @@ echo "
     Enable Solaris:                ${ENABLE_SOLARIS}
     Enable WaveOut:                ${ENABLE_WAVEOUT}
     Enable GLib 2.0:               ${ENABLE_GLIB20}
-    Enable Gtk+ 2.0:               ${ENABLE_GTK20}
+    Enable Gtk+ 3.0:               ${ENABLE_GTK30}
     Enable GConf:                  ${ENABLE_GCONF}
     Enable Avahi:                  ${ENABLE_AVAHI}
     Enable Jack:                   ${ENABLE_JACK}

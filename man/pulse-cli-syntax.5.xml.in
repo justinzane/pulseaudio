@@ -308,7 +308,7 @@ USA.
 
   <section name="Meta Commands">
     <p>
-      In addition the the commands described above there a few meta directives
+      In addition the commands described above there a few meta directives
       supported by the command line interpreter.
     </p>
     <option>
@@ -321,11 +321,6 @@ USA.
       <optdesc><p>Enable (resp. disable) that following failing commands will
       cancel the execution of the current script file. This is a ignored when
       used on the interactive command line.</p></optdesc>
-    </option>
-
-    <option>
-      <p><opt>.verbose</opt> and <opt>.noverbose</opt></p>
-      <optdesc><p>Enable (resp. disable) extra verbosity.</p></optdesc>
     </option>
   </section>
 

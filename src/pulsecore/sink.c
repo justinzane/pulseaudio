@@ -777,22 +777,43 @@ void pa_sink_set_asyncmsgq(pa_sink *s, pa_asyncmsgq *q) {
 
 /* Called from main context, and not while the IO thread is active, please */
 void pa_sink_update_flags(pa_sink *s, pa_sink_flags_t mask, pa_sink_flags_t value) {
+    pa_sink_flags_t old_flags;
+    pa_sink_input *input;
+    uint32_t idx;
+
     pa_sink_assert_ref(s);
     pa_assert_ctl_context();
-
-    if (mask == 0)
-        return;
 
     /* For now, allow only a minimal set of flags to be changed. */
     pa_assert((mask & ~(PA_SINK_DYNAMIC_LATENCY|PA_SINK_LATENCY)) == 0);
 
+    old_flags = s->flags;
     s->flags = (s->flags & ~mask) | (value & mask);
 
-    pa_source_update_flags(s->monitor_source,
-                           ((mask & PA_SINK_LATENCY) ? PA_SOURCE_LATENCY : 0) |
-                           ((mask & PA_SINK_DYNAMIC_LATENCY) ? PA_SOURCE_DYNAMIC_LATENCY : 0),
-                           ((value & PA_SINK_LATENCY) ? PA_SOURCE_LATENCY : 0) |
-                           ((value & PA_SINK_DYNAMIC_LATENCY) ? PA_SINK_DYNAMIC_LATENCY : 0));
+    if (s->flags == old_flags)
+        return;
+
+    if ((s->flags & PA_SINK_LATENCY) != (old_flags & PA_SINK_LATENCY))
+        pa_log_debug("Sink %s: LATENCY flag %s.", s->name, (s->flags & PA_SINK_LATENCY) ? "enabled" : "disabled");
+
+    if ((s->flags & PA_SINK_DYNAMIC_LATENCY) != (old_flags & PA_SINK_DYNAMIC_LATENCY))
+        pa_log_debug("Sink %s: DYNAMIC_LATENCY flag %s.",
+                     s->name, (s->flags & PA_SINK_DYNAMIC_LATENCY) ? "enabled" : "disabled");
+
+    pa_subscription_post(s->core, PA_SUBSCRIPTION_EVENT_SINK | PA_SUBSCRIPTION_EVENT_CHANGE, s->index);
+    pa_hook_fire(&s->core->hooks[PA_CORE_HOOK_SINK_FLAGS_CHANGED], s);
+
+    if (s->monitor_source)
+        pa_source_update_flags(s->monitor_source,
+                               ((mask & PA_SINK_LATENCY) ? PA_SOURCE_LATENCY : 0) |
+                               ((mask & PA_SINK_DYNAMIC_LATENCY) ? PA_SOURCE_DYNAMIC_LATENCY : 0),
+                               ((value & PA_SINK_LATENCY) ? PA_SOURCE_LATENCY : 0) |
+                               ((value & PA_SINK_DYNAMIC_LATENCY) ? PA_SOURCE_DYNAMIC_LATENCY : 0));
+
+    PA_IDXSET_FOREACH(input, s->inputs, idx) {
+        if (input->origin_sink)
+            pa_sink_update_flags(input->origin_sink, mask, value);
+    }
 }
 
 /* Called from IO context, or before _put() from main context */
@@ -929,6 +950,32 @@ void pa_sink_move_all_fail(pa_queue *q) {
     }
 
     pa_queue_free(q, NULL);
+}
+
+ /* Called from IO thread context */
+size_t pa_sink_process_input_underruns(pa_sink *s, size_t left_to_play) {
+    pa_sink_input *i;
+    void *state = NULL;
+    size_t result = 0;
+
+    pa_sink_assert_ref(s);
+    pa_sink_assert_io_context(s);
+
+    PA_HASHMAP_FOREACH(i, s->thread_info.inputs, state) {
+        size_t uf = i->thread_info.underrun_for_sink;
+        if (uf == 0)
+            continue;
+        if (uf >= left_to_play) {
+            if (pa_sink_input_process_underrun(i))
+                continue;
+        }
+        else if (uf > result)
+            result = uf;
+    }
+
+    if (result > 0)
+        pa_log_debug("Found underrun %ld bytes ago (%ld bytes ahead in playback buffer)", (long) result, (long) left_to_play - result);
+    return left_to_play - result;
 }
 
 /* Called from IO thread context */
@@ -3285,6 +3332,11 @@ void pa_sink_set_fixed_latency_within_thread(pa_sink *s, pa_usec_t latency) {
 
     if (s->flags & PA_SINK_DYNAMIC_LATENCY) {
         pa_assert(latency == 0);
+        s->thread_info.fixed_latency = 0;
+
+        if (s->monitor_source)
+            pa_source_set_fixed_latency_within_thread(s->monitor_source, 0);
+
         return;
     }
 
