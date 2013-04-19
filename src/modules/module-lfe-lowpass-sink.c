@@ -613,7 +613,7 @@ int pa__init(pa_module *module) {
             default:
                 cmi->type = ALLPASS;
                 pa_biquad_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 1, 2, 0.0);
-                pa_biquad_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 2, 2, 0.0);
+                pa_biquad_calc_factors(cmi->bqfs2, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 2, 2, 0.0);
         }
     }
 
