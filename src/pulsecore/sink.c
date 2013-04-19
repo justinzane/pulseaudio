@@ -326,35 +326,25 @@ pa_sink* pa_sink_new(
             0);
 
     s->thread_info.rtpoll = NULL;
-    s->thread_info.inputs = pa_hashmap_new(pa_idxset_trivial_hash_func,
-                                           pa_idxset_trivial_compare_func);
+    s->thread_info.inputs = pa_hashmap_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
     s->thread_info.soft_volume =  s->soft_volume;
     s->thread_info.soft_muted = s->muted;
     s->thread_info.state = s->state;
     s->thread_info.rewind_nbytes = 0;
     s->thread_info.rewind_requested = FALSE;
-    s->thread_info.max_rewind = MIN_MAX_REWIND_FRAMES * s->sample_spec.channels *
-            pa_sample_size(&(s->sample_spec));
-    fprintf(stderr, "JZ: %s[%d][%s]\n\tsink = %s\n\ts->thread_info.max_rewind = %lu\n",
-            __FILE__, __LINE__, __func__, s->name, s->thread_info.max_rewind);
+    s->thread_info.max_rewind = 0;
     s->thread_info.max_request = 0;
     s->thread_info.requested_latency_valid = FALSE;
     s->thread_info.requested_latency = 0;
     s->thread_info.min_latency = ABSOLUTE_MIN_LATENCY;
     s->thread_info.max_latency = ABSOLUTE_MAX_LATENCY;
-    s->thread_info.fixed_latency = (flags &
-                                    (PA_SINK_DYNAMIC_LATENCY ?
-                                            0 : DEFAULT_FIXED_LATENCY));
+    s->thread_info.fixed_latency = flags & PA_SINK_DYNAMIC_LATENCY ? 0 : DEFAULT_FIXED_LATENCY;
 
     PA_LLIST_HEAD_INIT(pa_sink_volume_change, s->thread_info.volume_changes);
     s->thread_info.volume_changes_tail = NULL;
-    pa_sw_cvolume_multiply(&s->thread_info.current_hw_volume,
-                           &s->soft_volume,
-                           &s->real_volume);
-    s->thread_info.volume_change_safety_margin =
-            core->deferred_volume_safety_margin_usec;
-    s->thread_info.volume_change_extra_delay =
-            core->deferred_volume_extra_delay_usec;
+    pa_sw_cvolume_multiply(&s->thread_info.current_hw_volume, &s->soft_volume, &s->real_volume);
+    s->thread_info.volume_change_safety_margin = core->deferred_volume_safety_margin_usec;
+    s->thread_info.volume_change_extra_delay = core->deferred_volume_extra_delay_usec;
     s->thread_info.latency_offset = s->latency_offset;
 
     /* FIXME: This should probably be moved to pa_sink_put() */
@@ -399,15 +389,9 @@ pa_sink* pa_sink_new(
 
     s->monitor_source->monitor_of = s;
 
-    pa_source_set_latency_range(s->monitor_source,
-                                s->thread_info.min_latency,
-                                s->thread_info.max_latency);
-    pa_source_set_fixed_latency(s->monitor_source,
-                                s->thread_info.fixed_latency);
-    pa_source_set_max_rewind(s->monitor_source,
-                             s->thread_info.max_rewind);
-    fprintf(stderr, "JZ: %s[%d][%s]\n\tsink = %s\n\ts->thread_info.max_rewind = %lu\n",
-            __FILE__, __LINE__, __func__, s->name, s->thread_info.max_rewind);
+    pa_source_set_latency_range(s->monitor_source, s->thread_info.min_latency, s->thread_info.max_latency);
+    pa_source_set_fixed_latency(s->monitor_source, s->thread_info.fixed_latency);
+    pa_source_set_max_rewind(s->monitor_source, s->thread_info.max_rewind);
 
     return s;
 }
@@ -2505,14 +2489,8 @@ int pa_sink_process_msg(pa_msgobject *o, int code, void *userdata, int64_t offse
              * the core than many times in the modules? */
 
             if (i->thread_info.requested_sink_latency != (pa_usec_t) -1)
-                pa_sink_input_set_requested_latency_within_thread(i,
-                                        i->thread_info.requested_sink_latency);
+                pa_sink_input_set_requested_latency_within_thread(i, i->thread_info.requested_sink_latency);
 
-            fprintf(stderr,
-                    "JZ: %s[%d]\n\t%s\n\tsink = %s\n"
-                    "\ts->thread_info.max_rewind = %lu\n",
-                    __FILE__, __LINE__, __func__, s->name,
-                    s->thread_info.max_rewind);
             pa_sink_input_update_max_rewind(i, s->thread_info.max_rewind);
             pa_sink_input_update_max_request(i, s->thread_info.max_request);
 
@@ -2716,9 +2694,6 @@ int pa_sink_process_msg(pa_msgobject *o, int code, void *userdata, int64_t offse
             if (i->thread_info.requested_sink_latency != (pa_usec_t) -1)
                 pa_sink_input_set_requested_latency_within_thread(i, i->thread_info.requested_sink_latency);
 
-            fprintf(stderr,
-                    "JZ: %s[%d]\n\t%s\n\ts->thread_info.max_rewind = %lu\n",
-                    __FILE__, __LINE__, __func__, s->thread_info.max_rewind);
             pa_sink_input_update_max_rewind(i, s->thread_info.max_rewind);
             pa_sink_input_update_max_request(i, s->thread_info.max_request);
 
@@ -3002,12 +2977,6 @@ void pa_sink_request_rewind(pa_sink*s, size_t nbytes) {
     if (nbytes == (size_t) -1)
         nbytes = s->thread_info.max_rewind;
 
-    fprintf(stderr,
-            "JZ: %s[%d]\n\t%s\n\tsink = %s\n"
-            "\ts->thread_info.max_rewind = %lu\n"
-            "\ts->req rewind bytes       = %lu\n",
-            __FILE__, __LINE__, __func__, s->name,
-            s->thread_info.max_rewind, nbytes);
     nbytes = PA_MIN(nbytes, s->thread_info.max_rewind);
 
     if (s->thread_info.rewind_requested &&
@@ -3076,10 +3045,8 @@ pa_usec_t pa_sink_get_requested_latency(pa_sink *s) {
     return usec;
 }
 
-/* Called from IO as well as the main thread -- the latter only before the IO
- * thread started up */
-void pa_sink_set_max_rewind_within_thread(pa_sink *s,
-                                          size_t max_rewind) {
+/* Called from IO as well as the main thread -- the latter only before the IO thread started up */
+void pa_sink_set_max_rewind_within_thread(pa_sink *s, size_t max_rewind) {
     pa_sink_input *i;
     void *state = NULL;
 
@@ -3089,31 +3056,14 @@ void pa_sink_set_max_rewind_within_thread(pa_sink *s,
     if (max_rewind == s->thread_info.max_rewind)
         return;
 
-    fprintf(stderr,
-            "JZ: %s[%d][%s]\n\tsink = %s\n"
-            "\ts->thread_info.max_rewind = %lu\n"
-            "\ts->new max_rewind         = %lu\n",
-            __FILE__, __LINE__, __func__,s->name,
-            s->thread_info.max_rewind, max_rewind);
+    s->thread_info.max_rewind = max_rewind;
 
-    if (PA_SINK_IS_LINKED(s->thread_info.state)) {
-        s->thread_info.max_rewind = max_rewind;
+    if (PA_SINK_IS_LINKED(s->thread_info.state))
         PA_HASHMAP_FOREACH(i, s->thread_info.inputs, state)
             pa_sink_input_update_max_rewind(i, s->thread_info.max_rewind);
-        fprintf(stderr,
-                "JZ: [%s[%d][%s] pa_sink_input_update_max_rewind was called.\n"
-                "\ts->thread_info.state = %d", __FILE__, __LINE__, __func__,
-                s->thread_info.state);
-        if (s->monitor_source) {
-            pa_source_set_max_rewind_within_thread(s->monitor_source,
-                                                   s->thread_info.max_rewind);
-        }
-    } else
-        fprintf(stderr,
-                "JZ: [%s[%d][%s] pa_sink_input_update_max_rewind not called!\n"
-                "\ts->thread_info.state = %d", __FILE__, __LINE__, __func__,
-                s->thread_info.state);
 
+    if (s->monitor_source)
+        pa_source_set_max_rewind_within_thread(s->monitor_source, s->thread_info.max_rewind);
 }
 
 /* Called from main thread */
@@ -3121,19 +3071,8 @@ void pa_sink_set_max_rewind(pa_sink *s, size_t max_rewind) {
     pa_sink_assert_ref(s);
     pa_assert_ctl_context();
 
-    fprintf(stderr, "JZ: %s[%d][%s]\n"
-            "\tsink = %s\n"
-            "\ts->thread_info.max_rewind = %lu\n"
-            "\ts->new max_rewind         = %lu\n",
-            __FILE__, __LINE__, __func__, s->name,
-            s->thread_info.max_rewind, max_rewind);
     if (PA_SINK_IS_LINKED(s->state))
-        pa_assert_se(pa_asyncmsgq_send(s->asyncmsgq,
-                                       PA_MSGOBJECT(s),
-                                       PA_SINK_MESSAGE_SET_MAX_REWIND,
-                                       NULL,
-                                       max_rewind,
-                                       NULL) == 0);
+        pa_assert_se(pa_asyncmsgq_send(s->asyncmsgq, PA_MSGOBJECT(s), PA_SINK_MESSAGE_SET_MAX_REWIND, NULL, max_rewind, NULL) == 0);
     else
         pa_sink_set_max_rewind_within_thread(s, max_rewind);
 }
