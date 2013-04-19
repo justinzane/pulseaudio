@@ -85,7 +85,7 @@ struct userdata {
 //    biquad_data *s2lpdt, *s2hpdt, *s2apdt;       /* history data for the various filters stage 2*/
 //    biquad_history *s2histbuf;                   /* rewind buffer for biquad_data stage 2*/
 //    biquad_types filter_map[PA_CHANNELS_MAX];    /* map of channels index to biquad_types */
-    biquad_filter_map_4 *filter_map;
+    pa_biquad_filter_map_4 *filter_map;
 };
 
 static int sink_process_msg_cb(pa_msgobject *msgobject, int code, void *data, int64_t offset, pa_memchunk *chunk) {
@@ -151,7 +151,7 @@ static void sink_update_requested_latency_cb(pa_sink *sink) {
 
 /* This seems like a silly thing. A filter should not influence the general volume of the stream.
  * TODO: Remove me safely. */
-static void sink_set_volume_cb(pa_sink *sink) {
+__attribute__((unused)) static void sink_set_volume_cb(pa_sink *sink) {
     struct userdata *u;
     pa_sink_assert_ref(sink);
     pa_assert_se(u = sink->userdata);
@@ -164,7 +164,7 @@ static void sink_set_volume_cb(pa_sink *sink) {
 
 /* This seems like a silly thing. A filter should not influence the general volume of the stream.
  * TODO: Remove me safely or keep me after discussion with reviewers. */
-static void sink_set_mute_cb(pa_sink *s) {
+__attribute__((unused)) static void sink_set_mute_cb(pa_sink *s) {
     struct userdata *u;
     pa_sink_assert_ref(s);
     pa_assert_se(u = s->userdata);
@@ -182,7 +182,7 @@ __attribute__((optimize(3))) static int sink_input_pop_cb(pa_sink_input *sink_in
                              size_t nbytes,
                              pa_memchunk *dst_chunk) {
     struct userdata *u;
-    pa_memchunk *src, *dst;
+    float *src, *dst;
     size_t framesize, num_frames;
     pa_memchunk tchunk;
 
@@ -213,56 +213,11 @@ __attribute__((optimize(3))) static int sink_input_pop_cb(pa_sink_input *sink_in
 
     pa_memblockq_drop(u->memblockq, dst_chunk->length);
 
-    src = pa_memblock_acquire_chunk(&tchunk);
-    dst = pa_memblock_acquire(dst_chunk->memblock);
+    src = (float*)pa_memblock_acquire_chunk(&tchunk);
+    dst = (float*)pa_memblock_acquire(dst_chunk->memblock);
 
+    /* The actual filtering! */
     pa_biquad_chunk_4(u->filter_map, src, dst, num_frames, u->sample_spec.channels);
-
-    /* (3) PUT YOUR CODE HERE TO DO SOMETHING WITH THE DATA
-    for (frm_idx = 0; frm_idx < num_frames; frm_idx++) {
-        cur_frame = src + frm_idx * u->sample_spec.channels;
-        dst_frame = dst + frm_idx * u->sample_spec.channels;
-        for (chan_idx = 0; chan_idx < u->sample_spec.channels; chan_idx++) {
-            cur_sample = cur_frame + chan_idx;
-            dst_sample = dst_frame + chan_idx;
-            if (u->filter_map[chan_idx] == LOWPASS) {
-                // stage 1
-                lp = pa_biquad(& (u->s1lpdt[chan_idx]), * (u->s1lpfs), cur_sample);
-                bqdtel.w0 = u->s1lpdt[chan_idx].w0;
-                bqdtel.y0 = u->s1lpdt[chan_idx].y0;
-                pa_store_history(u->s1histbuf, &bqdtel);
-                // stage 2
-                *dst_sample = pa_biquad(& (u->s2lpdt[chan_idx]), * (u->s2lpfs), &lp);
-                bqdtel.w0 = u->s2lpdt[chan_idx].w0;
-                bqdtel.y0 = u->s2lpdt[chan_idx].y0;
-                pa_store_history(u->s2histbuf, &bqdtel);
-            } else if (u->filter_map[chan_idx] == HIGHPASS) {
-                // stage 1
-                hp = pa_biquad(& (u->s1hpdt[chan_idx]), * (u->s1hpfs), cur_sample);
-                bqdtel.w0 = u->s1hpdt[chan_idx].w0;
-                bqdtel.y0 = u->s1hpdt[chan_idx].y0;
-                pa_store_history(u->s1histbuf, &bqdtel);
-                // stage 2
-                *dst_sample = pa_biquad(& (u->s2hpdt[chan_idx]), * (u->s2hpfs), &hp);
-                bqdtel.w0 = u->s2hpdt[chan_idx].w0;
-                bqdtel.y0 = u->s2hpdt[chan_idx].y0;
-                pa_store_history(u->s2histbuf, &bqdtel);
-            } else if (u->filter_map[chan_idx] == ALLPASS) {
-                // stage 1
-                ap = pa_biquad(& (u->s1apdt[chan_idx]), * (u->s1apfs), cur_sample);
-                bqdtel.w0 = u->s1apdt[chan_idx].w0;
-                bqdtel.y0 = u->s1apdt[chan_idx].y0;
-                pa_store_history(u->s1histbuf, &bqdtel);
-                // stage 2
-                *dst_sample = pa_biquad(& (u->s2apdt[chan_idx]), * (u->s2apfs), &ap);
-                bqdtel.w0 = u->s2apdt[chan_idx].w0;
-                bqdtel.y0 = u->s2apdt[chan_idx].y0;
-                pa_store_history(u->s2histbuf, &bqdtel);
-            } else {
-                pa_log_error("Should never get here, even in Jersey.");
-            }
-        }
-    } */
 
     pa_memblock_release(tchunk.memblock);
     pa_memblock_release(dst_chunk->memblock);
@@ -293,7 +248,7 @@ static void sink_input_process_rewind_cb(pa_sink_input *sink_input, size_t rewin
             pa_memblockq_seek(u->memblockq, -(int64_t)amount, PA_SEEK_RELATIVE, TRUE );
             /* (5) PUT YOUR CODE HERE TO REWIND YOUR FILTER */
             rewind_frames = (amount / pa_sample_size_of_format(u->sample_spec.format)) / u->sample_spec.channels;
-            biquad_rewind_filter(rewind_frames, u->filter_map);
+            pa_biquad_rewind_filter(rewind_frames, u->filter_map);
         }
     }
 
@@ -328,7 +283,7 @@ static void sink_input_update_max_rewind_cb(pa_sink_input *sink_input, size_t ma
         return;
     }
 
-    biquad_resize_rewind_buffer(max_rewind_frames, u->filter_map);
+    pa_biquad_resize_rewind_buffer(max_rewind_frames, u->filter_map);
 
     pa_memblockq_set_maxrewind(u->memblockq, max_rewind);
     pa_sink_set_max_rewind_within_thread(u->sink, max_rewind);
@@ -369,7 +324,7 @@ static void sink_input_detach_cb(pa_sink_input *sink_input) {
  * this is where the rewind buffer gets allocated, not in pa__init. */
 static void sink_input_attach_cb(pa_sink_input *input) {
     struct userdata *u;
-    biquad_map_item_4 *cmi;
+    pa_biquad_map_item_4 *cmi;
     size_t i;
     pa_sink_input_assert_ref(input);
     pa_assert_se(u = input->userdata);
@@ -393,8 +348,8 @@ static void sink_input_attach_cb(pa_sink_input *input) {
             cmi->bqhs1->length = u->sink->thread_info.max_rewind / u->sz_frm;
             cmi->bqhs2->length = u->sink->thread_info.max_rewind / u->sz_frm;
         }
-        cmi->bqhs1->buffer = calloc(cmi->bqhs1->length, sizeof(biquad_data_element));
-        cmi->bqhs2->buffer = calloc(cmi->bqhs2->length, sizeof(biquad_data_element));
+        cmi->bqhs1->buffer = calloc(cmi->bqhs1->length, sizeof(pa_biquad_data_element_t));
+        cmi->bqhs2->buffer = calloc(cmi->bqhs2->length, sizeof(pa_biquad_data_element_t));
     }
 
     /* FIXME: Too small max_rewind:
@@ -483,7 +438,7 @@ static void sink_input_mute_changed_cb(pa_sink_input *i) {
 int pa__init(pa_module *module) {
     struct userdata *u;
     pa_channel_map map;
-    biquad_map_item_4 *cmi = NULL;
+    pa_biquad_map_item_4 *cmi = NULL;
     pa_modargs *ma;
     pa_sink *master = NULL;
     pa_sink_input_new_data sink_input_data;
@@ -662,18 +617,18 @@ int pa__init(pa_module *module) {
             case PA_CHANNEL_POSITION_TOP_FRONT_CENTER:
             case PA_CHANNEL_POSITION_TOP_REAR_CENTER:
                 cmi->type = HIGHPASS;
-                pa_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 1, 2, 0.0);
-                pa_calc_factors(cmi->bqfs2, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 2, 2, 0.0);
+                pa_biquad_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 1, 2, 0.0);
+                pa_biquad_calc_factors(cmi->bqfs2, u->sink->sample_spec.rate, u->lpfreq, HIGHPASS, 2, 2, 0.0);
                 break;
             case PA_CHANNEL_POSITION_LFE:
                 cmi->type = LOWPASS;
-                pa_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 1, 2, 0.0);
-                pa_calc_factors(cmi->bqfs2, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 2, 2, 0.0);
+                pa_biquad_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 1, 2, 0.0);
+                pa_biquad_calc_factors(cmi->bqfs2, u->sink->sample_spec.rate, u->lpfreq, LOWPASS, 2, 2, 0.0);
                 break;
             default:
                 cmi->type = ALLPASS;
-                pa_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 1, 2, 0.0);
-                pa_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 2, 2, 0.0);
+                pa_biquad_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 1, 2, 0.0);
+                pa_biquad_calc_factors(cmi->bqfs1, u->sink->sample_spec.rate, u->lpfreq, ALLPASS, 2, 2, 0.0);
         }
     }
     fprintf(stderr, "JZ %s:%d:%s\n", __FILE__, __LINE__, __func__);
@@ -703,32 +658,13 @@ int pa__get_n_used(pa_module *m) {
 /* \note    See comments in sink_input_kill_cb() above about destruction order! */
 void pa__done(pa_module*m) {
     struct userdata *u;
-    size_t i;
-    biquad_map_item_4 *cmi;
     pa_assert(m);
 
     if (! (u = m->userdata))
         return;
 
-    for (i = 0; i < u->sample_spec.channels; i++) {
-        cmi = &u->filter_map->map[i];
-        if (cmi->bqdt1)
-            free(cmi->bqdt1);
-        if (cmi->bqdt2)
-            free(cmi->bqdt1);
-        if (cmi->bqfs1)
-            free(cmi->bqdt1);
-        if (cmi->bqfs2)
-            free(cmi->bqdt1);
-        if (cmi->bqhs1->buffer)
-            free(cmi->bqhs1->buffer);
-        if (cmi->bqhs2->buffer)
-            free(cmi->bqhs2->buffer);
-        if (cmi->bqhs1)
-            free(cmi->bqhs1);
-        if (cmi->bqhs2)
-            free(cmi->bqhs2);
-    }
+    if (u->filter_map)
+        pa_del_biquad_filter_map_4(u->filter_map);
 
     if (u->sink_input)
         pa_sink_input_unlink(u->sink_input);

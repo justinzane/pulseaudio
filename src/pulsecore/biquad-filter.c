@@ -25,22 +25,12 @@
  */
 #include <pulsecore/biquad-filter.h>
 
-__attribute__((hot)) void pa_biquad_chunk_4(struct biquad_filter_map_4 *fm,
-                                            float *src,
-                                            float *dst,
-                                            size_t num_frames,
-                                            uint8_t num_chans) {
+__attribute__((hot)) void pa_biquad_chunk_4(struct biquad_filter_map_4 *fm, float *src,
+                                            float *dst, size_t num_frames, uint8_t num_chans) {
     size_t frm_idx, chan_idx;
     float *cur_sample, *dst_sample, *tmp_sample;
     float *cur_frame, *dst_frame;
     tmp_sample = calloc(1,sizeof(float));
-
-    /* TODO:
-     * - stages 1 and 2
-     * - loop through input, filter based on map
-     * - make sure to update history
-     * NOTE: basically same as initial version from lfe-lp.c
-     */
 
     for (frm_idx = 0; frm_idx < num_frames; frm_idx++) {
         cur_frame = src + frm_idx * num_chans;
@@ -49,56 +39,30 @@ __attribute__((hot)) void pa_biquad_chunk_4(struct biquad_filter_map_4 *fm,
             cur_sample = cur_frame + chan_idx;
             dst_sample = dst_frame + chan_idx;
             // stage 1
-            *tmp_sample = pa_biquad(fm->map[chan_idx].bqdt1,
-                                    fm->map[chan_idx].bqfs1,
-                                    fm->map[chan_idx].bqhs1,
-                                    cur_sample);
+            pa_biquad(fm->map[chan_idx].bqdt1,
+                      fm->map[chan_idx].bqfs1,
+                      fm->map[chan_idx].bqhs1,
+                      cur_sample,
+                      tmp_sample);
             // stage 2
-            *dst_sample = pa_biquad(fm->map[chan_idx].bqdt2,
-                                    fm->map[chan_idx].bqfs2,
-                                    fm->map[chan_idx].bqhs2,
-                                    tmp_sample);
-
-//            if (fm[chan_idx] == LOWPASS) {
-//            } else if (fm[chan_idx] == HIGHPASS) {
-//                // stage 1
-//                hp = pa_biquad(& (u->s1hpdt[chan_idx]), * (u->s1hpfs), cur_sample);
-//                bqdtel.w0 = u->s1hpdt[chan_idx].w0;
-//                bqdtel.y0 = u->s1hpdt[chan_idx].y0;
-//                pa_store_history(u->s1histbuf, &bqdtel);
-//                // stage 2
-//                *dst_sample = pa_biquad(& (u->s2hpdt[chan_idx]), * (u->s2hpfs), &hp);
-//                bqdtel.w0 = u->s2hpdt[chan_idx].w0;
-//                bqdtel.y0 = u->s2hpdt[chan_idx].y0;
-//                pa_store_history(u->s2histbuf, &bqdtel);
-//            } else if (fm[chan_idx] == ALLPASS) {
-//                // stage 1
-//                ap = pa_biquad(& (u->s1apdt[chan_idx]), * (u->s1apfs), cur_sample);
-//                bqdtel.w0 = u->s1apdt[chan_idx].w0;
-//                bqdtel.y0 = u->s1apdt[chan_idx].y0;
-//                pa_store_history(u->s1histbuf, &bqdtel);
-//                // stage 2
-//                *dst_sample = pa_biquad(& (u->s2apdt[chan_idx]), * (u->s2apfs), &ap);
-//                bqdtel.w0 = u->s2apdt[chan_idx].w0;
-//                bqdtel.y0 = u->s2apdt[chan_idx].y0;
-//                pa_store_history(u->s2histbuf, &bqdtel);
-//            } else {
-//                pa_log_error("Should never get here, even in Jersey.");
-//            }
+            pa_biquad(fm->map[chan_idx].bqdt2,
+                      fm->map[chan_idx].bqfs2,
+                      fm->map[chan_idx].bqhs2,
+                      tmp_sample,
+                      dst_sample);
         }
     }
-
 }
 
-// TODO: refactor me to use pointer args
-__attribute__((hot)) float pa_biquad(struct biquad_data *bqdt,
+__attribute__((hot)) void pa_biquad(struct biquad_data *bqdt,
                                      struct biquad_factors *bqfs,
                                      struct biquad_history *bqhs,
-                                     float *src) {
+                                     float *src,
+                                     float *dst) {
     //#y0= (b0 * x0 + b1 * x1 + b2 * x2) − (a1 * y1 + a2 * y2);
-    bqdt->w0 = (double)*src;
+    bqdt->w0 = (double) *src;
     bqdt->y0 = (bqdt->w0 * bqfs->b0 + bqdt->w1 * bqfs->b1 + bqdt->w2 * bqfs->b2) -
-                 (bqdt->y1 * bqfs->a1 +bqdt->y2 * bqfs->a2);
+               (bqdt->y1 * bqfs->a1 +bqdt->y2 * bqfs->a2);
     bqdt->w2 = bqdt->w1;
     bqdt->w1 = bqdt->w0;
     bqdt->y2 = bqdt->y1;
@@ -113,11 +77,11 @@ __attribute__((hot)) float pa_biquad(struct biquad_data *bqdt,
         bqhs->idx = 0;
     }
 
-    return ((float) bqdt->y0);
+    *dst = (float) bqdt->y0;
 }
 
-void pa_calc_factors(biquad_factors *bqfs, double sample_rate, double cutoff_freq,
-                     biquad_types type, unsigned int stage, unsigned int num_stages, double gain) {
+void pa_biquad_calc_factors(pa_biquad_factors_t *bqfs, double sample_rate, double cutoff_freq,
+                     pa_biquad_types type, unsigned int stage, unsigned int num_stages, double gain) {
     double w0, alpha, A;
 
     /* \see http://www.linkwitzlab.com/filters.htm */
@@ -185,14 +149,6 @@ void pa_calc_factors(biquad_factors *bqfs, double sample_rate, double cutoff_fre
             break;
         }
         case LOWSHELF: {
-            /* lowShelf: H(s) = A * (s^2 + (sqrt(A)/Q)*s + A)/(A*s^2 + (sqrt(A)/Q)*s + 1)
-                           b0 =    A*( (A+1) - (A-1)*cos(w0) + 2*sqrt(A)*alpha )
-                           b1 =  2*A*( (A-1) - (A+1)*cos(w0)                   )
-                           b2 =    A*( (A+1) - (A-1)*cos(w0) - 2*sqrt(A)*alpha )
-                           a0 =        (A+1) + (A-1)*cos(w0) + 2*sqrt(A)*alpha
-                           a1 =   -2*( (A-1) + (A+1)*cos(w0)                   )
-                           a2 =        (A+1) + (A-1)*cos(w0) - 2*sqrt(A)*alpha
-                           */
             bqfs->a0 = (          ((A + 1.0) + (A - 1.0) * cos(w0) + 2.0 * sqrt(A) * alpha));
             bqfs->a2 = (   -2.0 * ((A + 1.0) + (A - 1.0) * cos(w0)                        )) / bqfs->a0;
             bqfs->a2 = (          ((A + 1.0) + (A - 1.0) * cos(w0) - 2.0 * sqrt(A) * alpha)) / bqfs->a0;
@@ -215,8 +171,8 @@ void pa_calc_factors(biquad_factors *bqfs, double sample_rate, double cutoff_fre
 
 }
 
-biquad_data *pa_init_bqdt() {
-    biquad_data *bqdt = calloc(1, sizeof(biquad_data));
+pa_biquad_data_t *pa_init_bqdt() {
+    pa_biquad_data_t *bqdt = calloc(1, sizeof(pa_biquad_data_t));
 
     fprintf(stderr, "JZ %s:%d:%s\n\tbqdt = %p\n", __FILE__, __LINE__, __func__, bqdt);
     bqdt->w0 = 0.0; bqdt->w1 = 0.0; bqdt->w2 = 0.0;
@@ -224,15 +180,23 @@ biquad_data *pa_init_bqdt() {
     return bqdt;
 }
 
-biquad_factors *pa_init_bqfs() {
-    biquad_factors *bqfs = malloc(sizeof(biquad_factors));
+void pa_del_bqdt(pa_biquad_data_t *bqdt) {
+    free(bqdt);
+}
+
+pa_biquad_factors_t *pa_init_bqfs() {
+    pa_biquad_factors_t *bqfs = malloc(sizeof(pa_biquad_factors_t));
     bqfs->a0 = 0.0; bqfs->a1 = 0.0; bqfs->a2 = 0.0;
     bqfs->b0 = 0.0; bqfs->b1 = 0.0; bqfs->b2 = 0.0;
     return bqfs;
 }
 
-biquad_history *pa_init_biquad_history() {
-    biquad_history *bqhs = calloc(4, sizeof(size_t));
+void pa_del_bqfs(pa_biquad_factors_t *bqfs) {
+    free(bqfs);
+}
+
+pa_biquad_history_t* pa_init_biquad_history() {
+    pa_biquad_history_t *bqhs = calloc(4, sizeof(size_t));
     bqhs->idx = 0;
     bqhs->start = 0;
     bqhs->length = 0;
@@ -240,12 +204,16 @@ biquad_history *pa_init_biquad_history() {
     return bqhs;
 }
 
-biquad_filter_map_4 *pa_init_biquad_filter_map_4(uint8_t num_chans) {
+void pa_del_biquad_history(pa_biquad_history_t *bqhs) {
+    free(bqhs);
+}
+
+pa_biquad_filter_map_4 *pa_init_biquad_filter_map_4(uint8_t num_chans) {
     size_t i = 0;
-    biquad_filter_map_4 *map = calloc(2, sizeof(size_t));
+    pa_biquad_filter_map_4 *map = calloc(2, sizeof(size_t));
 
     map->num_chans = (size_t)num_chans;
-    map->map = calloc(num_chans, sizeof(biquad_map_item_4));
+    map->map = calloc(num_chans, sizeof(pa_biquad_map_item_4));
 
     for (i = 0; i < num_chans; i++) {
         map->map[i].bqdt1 = pa_init_bqdt();
@@ -258,89 +226,24 @@ biquad_filter_map_4 *pa_init_biquad_filter_map_4(uint8_t num_chans) {
     return map;
 }
 
-void pa_store_history(biquad_history *bqhist,
-                                 biquad_data_element *bqdtel) {
-    bqhist->buffer[bqhist->idx] = *bqdtel;
-    bqhist->idx += 1;
-    if (bqhist->idx >= bqhist->length)
-        bqhist->idx = 0;
-}
-
-/**
- * \fn biquad_deinterleave_chunk
- * \brief Transposes a memchunk from frame oriented to channel oriented; that is, from an
- *        array of frames of channel-indexed samples to an array of channels of frame-indexed
- *        samples.
- * \param [in]  src_chunk   pointer to normal pa_memchunk
- * \param [out] dst_chunk   pointer to deinterleaved pa_memchunk
- * \param [in]  smp_spec    pointer to sample specification
- * \param [in]  len_chunk   length, in bytes, of the memchunks
- */
-__attribute__((hot)) void biquad_deinterleave_chunk(pa_memchunk *src_chunk,
-                                                    pa_memchunk *dst_chunk,
-                                                    pa_sample_spec *smp_spec,
-                                                    size_t len_chunk) {
-    size_t cur_frame, num_frames, smp_size;
-    uint8_t cur_chan, num_chans;
-
-    /* TODO: validate input */
-    pa_assert(smp_spec);
-    pa_assert(src_chunk);
-    pa_assert(dst_chunk);
-    num_chans = (*smp_spec).channels;
-    smp_size = pa_sample_size(smp_spec);
-    pa_assert((len_chunk % (num_chans * smp_size)) == 0);
-    num_frames = (len_chunk / num_chans);
-    fprintf(stderr, "num_chans %u\n\tnum_frames %lu\n\tlen_chunk %lu\n", num_chans, num_frames, len_chunk);
-
-    for (cur_frame = 0; cur_frame < num_frames; cur_frame++) {
-        for (cur_chan = 0; cur_chan < num_chans; cur_chan++) {
-            fprintf(stderr, "nf, %lu, ns, %u\n", cur_frame, cur_chan);
-            fprintf(stderr, "dst[%lu] = src[%lu]\n",
-                    (cur_frame * num_chans) + cur_chan,
-                    (cur_chan * num_frames) + cur_frame);
-            dst_chunk[(cur_frame * num_chans) + cur_chan] = src_chunk[(cur_chan * num_frames) + cur_frame];
-        }
+void pa_del_biquad_filter_map_4(pa_biquad_filter_map_4 *bqfm) {
+    size_t i = 0;
+    for (i = 0; i < bqfm->num_chans; i++) {
+        pa_del_bqdt(bqfm->map[i].bqdt1);
+        pa_del_bqdt(bqfm->map[i].bqdt2);
+        pa_del_bqfs(bqfm->map[i].bqfs1);
+        pa_del_bqfs(bqfm->map[i].bqfs2);
+        pa_del_biquad_history(bqfm->map[i].bqhs1);
+        pa_del_biquad_history(bqfm->map[i].bqhs2);
     }
+    free(bqfm->map);
+    free(bqfm);
 }
 
-/**
- * \fn biquad_reinterleave_chunk
- * \brief Transposes a memchunk from channel oriented to frame oriented; that is, from an
- *        array of channels of frame-indexed samples to an array of frames of channel-indexed
- *        samples.
- * \param [in]  src_chunk   pointer to deinterleaved pa_memchunk
- * \param [out] dst_chunk   pointer to normal pa_memchunk
- * \param [in]  smp_spec    pointer to sample specification
- * \param [in]  len_chunk   length, in bytes, of the memchunks
- */
-__attribute__((hot)) void biquad_reinterleave_chunk(pa_memchunk *src_chunk,
-                                                    pa_memchunk *dst_chunk,
-                                                    pa_sample_spec *smp_spec,
-                                                    size_t len_chunk) {
-    size_t nf, num_frames, smp_size;
-    uint8_t ns, num_chans;
-
-    /* TODO: validate input */
-    pa_assert(smp_spec);
-    pa_assert(src_chunk);
-    pa_assert(dst_chunk);
-    num_chans = (*smp_spec).channels;
-    smp_size = pa_sample_size(smp_spec);
-    pa_assert((len_chunk % (num_chans * smp_size)) == 0);
-    num_frames = (len_chunk / num_chans);
-
-    for (nf = 0; nf < num_frames; nf++) {
-        for (ns = 0; ns < num_chans; ns++) {
-            dst_chunk[(num_frames * ns) + nf] = src_chunk[(num_chans * nf) + ns];
-        }
-    }
-}
-
-__attribute__((hot)) void biquad_rewind_filter(size_t rewind_frames,
-                                               biquad_filter_map_4 *filter_map) {
+__attribute__((hot)) void pa_biquad_rewind_filter(size_t rewind_frames,
+                                               pa_biquad_filter_map_4 *filter_map) {
     size_t i;
-    biquad_map_item_4 *cmi;
+    pa_biquad_map_item_4 *cmi;
 
     if (rewind_frames == 0) {
         pa_log_error("%d : %s : rewind_frames was 0.", __LINE__, __func__);
@@ -426,9 +329,9 @@ __attribute__((hot)) void biquad_rewind_filter(size_t rewind_frames,
     }
 }
 
-void biquad_resize_rewind_buffer(size_t rewind_frames,
-                                 biquad_filter_map_4 *filter_map) {
-    biquad_map_item_4 *cmi;
+void pa_biquad_resize_rewind_buffer(size_t rewind_frames,
+                                 pa_biquad_filter_map_4 *filter_map) {
+    pa_biquad_map_item_4 *cmi;
     size_t shrinkage = 0;
     size_t i = 0;
 
@@ -448,8 +351,8 @@ void biquad_resize_rewind_buffer(size_t rewind_frames,
         if (rewind_frames > cmi->bqhs1->length) {
             pa_log_warn("[%d]%s all in frames\n\tcur rewind_frames = %12lu\n\treq rewind_frames = %12lu\n",
                          __LINE__, __func__, cmi->bqhs1->length, rewind_frames);
-            cmi->bqhs1->buffer = realloc(cmi->bqhs1->buffer, rewind_frames*sizeof(biquad_data_element));
-            cmi->bqhs2->buffer = realloc(cmi->bqhs2->buffer, rewind_frames*sizeof(biquad_data_element));
+            cmi->bqhs1->buffer = realloc(cmi->bqhs1->buffer, rewind_frames*sizeof(pa_biquad_data_element_t));
+            cmi->bqhs2->buffer = realloc(cmi->bqhs2->buffer, rewind_frames*sizeof(pa_biquad_data_element_t));
             cmi->bqhs1->length = rewind_frames;
             cmi->bqhs2->length = rewind_frames;
             return;
@@ -467,7 +370,7 @@ void biquad_resize_rewind_buffer(size_t rewind_frames,
                 cmi->bqhs1->buffer[i] = cmi->bqhs1->buffer[i + shrinkage];
             cmi->bqhs1->length -= shrinkage;
             cmi->bqhs1->buffer = realloc(cmi->bqhs1->buffer,
-                                         (sizeof(biquad_data_element) * cmi->bqhs1->length));
+                                         (sizeof(pa_biquad_data_element_t) * cmi->bqhs1->length));
             if (cmi->bqhs1->idx > shrinkage)
                 cmi->bqhs1->idx -= shrinkage;
             else
