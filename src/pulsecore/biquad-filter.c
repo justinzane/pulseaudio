@@ -3,7 +3,7 @@
  * \date		Apr 2, 2013
  * \author      Justin Chudgar, justin@justinzane.com
  * \copyright   Justin Chudgar
- * \license		GPLv3
+ * \license		LGPLv2.1
     This file is part of PulseAudio.
 
     Copyright 2013 Justin Chudgar <justin@justinzane.com>
