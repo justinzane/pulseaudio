@@ -1,5 +1,5 @@
 /**
- * \file        module-lfe-lp.c
+ * \file        module-lfe-lowpass-sink.c
  * \date        Apr 2, 2013
  * \author      Justin Chudgar, justin@justinzane.com
  * \copyright   Justin Chudgar
