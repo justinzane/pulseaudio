@@ -76,6 +76,15 @@
 #endif
 #endif
 
+#ifndef PA_GCC_HOT
+#ifdef __GNUC__
+#define PA_GCC_HOT __attribute__ ((hot))
+#else
+/** This function's return value depends only the arguments list and global state **/
+#define PA_GCC_HOT
+#endif
+#endif
+
 #ifndef PA_GCC_CONST
 #ifdef __GNUC__
 #define PA_GCC_CONST __attribute__ ((const))
