@@ -539,6 +539,36 @@ pa_channel_map *pa_channel_map_parse(pa_channel_map *rmap, const char *s) {
         map.map[0] = PA_CHANNEL_POSITION_LEFT;
         map.map[1] = PA_CHANNEL_POSITION_RIGHT;
         goto finish;
+    } else if (pa_streq(s, "stereo-21")) {
+        /* less than well known mapping, includes subwoofer */
+        map.channels = 3;
+        map.map[0] = PA_CHANNEL_POSITION_FRONT_LEFT;
+        map.map[1] = PA_CHANNEL_POSITION_FRONT_RIGHT;
+        map.map[2] = PA_CHANNEL_POSITION_LFE;
+        goto finish;
+    } else if (pa_streq(s, "stereo-30")) {
+        /* less than well know mapping, includes center channel (TV speaker bar) */
+        map.channels = 3;
+        map.map[0] = PA_CHANNEL_POSITION_FRONT_LEFT;
+        map.map[1] = PA_CHANNEL_POSITION_FRONT_RIGHT;
+        map.map[2] = PA_CHANNEL_POSITION_FRONT_CENTER;
+        goto finish;
+    } else if (pa_streq(s, "stereo-31")) {
+        /* less than well know mapping, includes center channel (TV speaker bar) and subwoofer */
+        map.channels = 4;
+        map.map[0] = PA_CHANNEL_POSITION_FRONT_LEFT;
+        map.map[1] = PA_CHANNEL_POSITION_FRONT_RIGHT;
+        map.map[2] = PA_CHANNEL_POSITION_FRONT_CENTER;
+        map.map[3] = PA_CHANNEL_POSITION_LFE;
+        goto finish;
+    } else if (pa_streq(s, "surround-31")) {
+        /* less than well know mapping, includes mono rear and subwoofer */
+        map.channels = 4;
+        map.map[0] = PA_CHANNEL_POSITION_FRONT_LEFT;
+        map.map[1] = PA_CHANNEL_POSITION_FRONT_RIGHT;
+        map.map[2] = PA_CHANNEL_POSITION_REAR_CENTER;
+        map.map[3] = PA_CHANNEL_POSITION_LFE;
+        goto finish;
     } else if (pa_streq(s, "surround-40")) {
         map.channels = 4;
         map.map[0] = PA_CHANNEL_POSITION_FRONT_LEFT;
@@ -683,6 +713,19 @@ int pa_channel_map_can_fade(const pa_channel_map *map) {
         (PA_CHANNEL_POSITION_MASK_REAR & m);
 }
 
+int pa_channel_map_can_level(const pa_channel_map *map) {
+    pa_channel_position_mask_t m;
+
+    pa_assert(map);
+    pa_return_val_if_fail(pa_channel_map_valid(map), 0);
+
+    m = pa_channel_map_mask(map);
+
+    //TODO: Fix the assumption that anything with top channels also includes low channels.
+    return
+        (PA_CHANNEL_POSITION_MASK_TOP & m);
+}
+
 const char* pa_channel_map_to_name(const pa_channel_map *map) {
     pa_bitset_t in_map[PA_BITSET_ELEMENTS(PA_CHANNEL_POSITION_MAX)];
     unsigned c;
@@ -703,6 +746,26 @@ const char* pa_channel_map_to_name(const pa_channel_map *map) {
     if (pa_bitset_equals(in_map, PA_CHANNEL_POSITION_MAX,
                          PA_CHANNEL_POSITION_LEFT, PA_CHANNEL_POSITION_RIGHT, -1))
         return "stereo";
+
+    if (pa_bitset_equals(in_map, PA_CHANNEL_POSITION_MAX,
+                         PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+                         PA_CHANNEL_POSITION_LFE, -1))
+        return "stereo-21";
+
+    if (pa_bitset_equals(in_map, PA_CHANNEL_POSITION_MAX,
+                         PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+                         PA_CHANNEL_POSITION_FRONT_CENTER, -1))
+        return "stereo-30";
+
+    if (pa_bitset_equals(in_map, PA_CHANNEL_POSITION_MAX,
+                         PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+                         PA_CHANNEL_POSITION_FRONT_CENTER, PA_CHANNEL_POSITION_LFE, -1))
+        return "stereo-31";
+
+    if (pa_bitset_equals(in_map, PA_CHANNEL_POSITION_MAX,
+                         PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+                         PA_CHANNEL_POSITION_REAR_CENTER, PA_CHANNEL_POSITION_LFE, -1))
+        return "surround-31";
 
     if (pa_bitset_equals(in_map, PA_CHANNEL_POSITION_MAX,
                          PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
@@ -759,6 +822,26 @@ const char* pa_channel_map_to_pretty_name(const pa_channel_map *map) {
     if (pa_bitset_equals(in_map, PA_CHANNEL_POSITION_MAX,
                          PA_CHANNEL_POSITION_LEFT, PA_CHANNEL_POSITION_RIGHT, -1))
         return _("Stereo");
+
+    if (pa_bitset_equals(in_map, PA_CHANNEL_POSITION_MAX,
+                         PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+                         PA_CHANNEL_POSITION_LFE, -1))
+        return _("Stereo and Subwoofer");
+
+    if (pa_bitset_equals(in_map, PA_CHANNEL_POSITION_MAX,
+                         PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+                         PA_CHANNEL_POSITION_FRONT_CENTER, -1))
+        return _("Stereo and Center");
+
+    if (pa_bitset_equals(in_map, PA_CHANNEL_POSITION_MAX,
+                         PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+                         PA_CHANNEL_POSITION_FRONT_CENTER, PA_CHANNEL_POSITION_LFE, -1))
+        return _("Stereo, Center and Subwoofer");
+
+    if (pa_bitset_equals(in_map, PA_CHANNEL_POSITION_MAX,
+                         PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+                         PA_CHANNEL_POSITION_REAR_CENTER, PA_CHANNEL_POSITION_LFE, -1))
+        return _("Surround 3.1");
 
     if (pa_bitset_equals(in_map, PA_CHANNEL_POSITION_MAX,
                          PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
