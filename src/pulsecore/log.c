@@ -29,6 +29,8 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 #ifdef HAVE_EXECINFO_H
 #include <execinfo.h>
@@ -36,6 +38,10 @@
 
 #ifdef HAVE_SYSLOG_H
 #include <syslog.h>
+#endif
+
+#ifdef HAVE_JOURNAL
+#include <systemd/sd-journal.h>
 #endif
 
 #include <pulse/gccmacro.h>
@@ -47,9 +53,11 @@
 
 #include <pulsecore/macro.h>
 #include <pulsecore/core-util.h>
+#include <pulsecore/core-error.h>
 #include <pulsecore/once.h>
 #include <pulsecore/ratelimit.h>
 #include <pulsecore/thread.h>
+#include <pulsecore/i18n.h>
 
 #include "log.h"
 
@@ -63,15 +71,18 @@
 #define ENV_LOG_BACKTRACE "PULSE_LOG_BACKTRACE"
 #define ENV_LOG_BACKTRACE_SKIP "PULSE_LOG_BACKTRACE_SKIP"
 #define ENV_LOG_NO_RATELIMIT "PULSE_LOG_NO_RATE_LIMIT"
+#define LOG_MAX_SUFFIX_NUMBER 99
 
 static char *ident = NULL; /* in local charset format */
-static pa_log_target_t target = PA_LOG_STDERR, target_override;
-static pa_bool_t target_override_set = FALSE;
+static pa_log_target target = { PA_LOG_STDERR, NULL };
+static pa_log_target_type_t target_override;
+static bool target_override_set = false;
 static pa_log_level_t maximum_level = PA_LOG_ERROR, maximum_level_override = PA_LOG_ERROR;
 static unsigned show_backtrace = 0, show_backtrace_override = 0, skip_backtrace = 0;
 static pa_log_flags_t flags = 0, flags_override = 0;
-static pa_bool_t no_rate_limit = FALSE;
+static bool no_rate_limit = false;
 static int log_fd = -1;
+static int write_type = 0;
 
 #ifdef HAVE_SYSLOG_H
 static const int level_to_syslog[] = {
@@ -80,6 +91,18 @@ static const int level_to_syslog[] = {
     [PA_LOG_NOTICE] = LOG_NOTICE,
     [PA_LOG_INFO] = LOG_INFO,
     [PA_LOG_DEBUG] = LOG_DEBUG
+};
+#endif
+
+/* These are actually equivalent to the syslog ones
+ * but we don't want to depend on syslog.h */
+#ifdef HAVE_JOURNAL
+static const int level_to_journal[] = {
+    [PA_LOG_ERROR]  = 3,
+    [PA_LOG_WARN]   = 4,
+    [PA_LOG_NOTICE] = 5,
+    [PA_LOG_INFO]   = 6,
+    [PA_LOG_DEBUG]  = 7
 };
 #endif
 
@@ -113,10 +136,68 @@ void pa_log_set_level(pa_log_level_t l) {
     maximum_level = l;
 }
 
-void pa_log_set_target(pa_log_target_t t) {
-    pa_assert(t < PA_LOG_TARGET_MAX);
+int pa_log_set_target(pa_log_target *t) {
+    int fd = -1;
+    int old_fd;
 
-    target = t;
+    pa_assert(t);
+
+    switch (t->type) {
+        case PA_LOG_STDERR:
+        case PA_LOG_SYSLOG:
+#ifdef HAVE_JOURNAL
+        case PA_LOG_JOURNAL:
+#endif
+        case PA_LOG_NULL:
+            break;
+        case PA_LOG_FILE:
+            if ((fd = pa_open_cloexec(t->file, O_WRONLY | O_TRUNC | O_CREAT, S_IRUSR | S_IWUSR)) < 0) {
+                pa_log(_("Failed to open target file '%s'."), t->file);
+                return -1;
+            }
+            break;
+        case PA_LOG_NEWFILE: {
+            char *file_path;
+            char *p;
+            unsigned version;
+
+            file_path = pa_sprintf_malloc("%s.xx", t->file);
+            p = file_path + strlen(t->file);
+
+            for (version = 0; version <= LOG_MAX_SUFFIX_NUMBER; version++) {
+                memset(p, 0, 3); /* Overwrite the ".xx" part in file_path with zero bytes. */
+
+                if (version > 0)
+                    pa_snprintf(p, 4, ".%u", version); /* Why 4? ".xx" + termitating zero byte. */
+
+                if ((fd = pa_open_cloexec(file_path, O_WRONLY | O_TRUNC | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)) >= 0)
+                    break;
+            }
+
+            if (version > LOG_MAX_SUFFIX_NUMBER) {
+                pa_log(_("Tried to open target file '%s', '%s.1', '%s.2' ... '%s.%d', but all failed."),
+                        t->file, t->file, t->file, t->file, LOG_MAX_SUFFIX_NUMBER);
+                pa_xfree(file_path);
+                return -1;
+            } else
+                pa_log_debug("Opened target file %s\n", file_path);
+
+            pa_xfree(file_path);
+            break;
+        }
+    }
+
+    target.type = t->type;
+    pa_xfree(target.file);
+    target.file = pa_xstrdup(t->file);
+
+    old_fd = log_fd;
+    log_fd = fd;
+
+    if (old_fd >= 0)
+        pa_close(old_fd);
+
+    return 0;
 }
 
 void pa_log_set_flags(pa_log_flags_t _flags, pa_log_merge_t merge) {
@@ -128,15 +209,6 @@ void pa_log_set_flags(pa_log_flags_t _flags, pa_log_merge_t merge) {
         flags &= ~_flags;
     else
         flags = _flags;
-}
-
-void pa_log_set_fd(int fd) {
-    if (fd >= 0)
-        log_fd = fd;
-    else if (log_fd >= 0) {
-        pa_close(log_fd);
-        log_fd = -1;
-    }
 }
 
 void pa_log_set_show_backtrace(unsigned nlevels) {
@@ -220,7 +292,7 @@ static void init_defaults(void) {
 
         if (getenv(ENV_LOG_SYSLOG)) {
             target_override = PA_LOG_SYSLOG;
-            target_override_set = TRUE;
+            target_override_set = true;
         }
 
         if ((e = getenv(ENV_LOG_LEVEL))) {
@@ -260,10 +332,24 @@ static void init_defaults(void) {
         }
 
         if (getenv(ENV_LOG_NO_RATELIMIT))
-            no_rate_limit = TRUE;
+            no_rate_limit = true;
 
     } PA_ONCE_END;
 }
+
+#ifdef HAVE_SYSLOG_H
+static void log_syslog(pa_log_level_t level, char *t, char *timestamp, char *location, char *bt) {
+    char *local_t;
+
+    openlog(ident, LOG_PID, LOG_USER);
+
+    if ((local_t = pa_utf8_to_locale(t)))
+        t = local_t;
+
+    syslog(level_to_syslog[level], "%s%s%s%s", timestamp, location, t, pa_strempty(bt));
+    pa_xfree(local_t);
+}
+#endif
 
 void pa_log_levelv_meta(
         pa_log_level_t level,
@@ -276,7 +362,7 @@ void pa_log_levelv_meta(
     char *t, *n;
     int saved_errno = errno;
     char *bt = NULL;
-    pa_log_target_t _target;
+    pa_log_target_type_t _target;
     pa_log_level_t _maximum_level;
     unsigned _show_backtrace;
     pa_log_flags_t _flags;
@@ -290,7 +376,7 @@ void pa_log_levelv_meta(
 
     init_defaults();
 
-    _target = target_override_set ? target_override : target;
+    _target = target_override_set ? target_override : target.type;
     _maximum_level = PA_MAX(maximum_level, maximum_level_override);
     _show_backtrace = PA_MAX(show_backtrace, show_backtrace_override);
     _flags = flags | flags_override;
@@ -303,9 +389,11 @@ void pa_log_levelv_meta(
     pa_vsnprintf(text, sizeof(text), format, ap);
 
     if ((_flags & PA_LOG_PRINT_META) && file && line > 0 && func)
-        pa_snprintf(location, sizeof(location), "[%s][%s:%i %s()] ", pa_thread_get_name(pa_thread_self()), file, line, func);
+        pa_snprintf(location, sizeof(location), "[%s][%s:%i %s()] ",
+                    pa_strnull(pa_thread_get_name(pa_thread_self())), file, line, func);
     else if ((_flags & (PA_LOG_PRINT_META|PA_LOG_PRINT_FILE)) && file)
-        pa_snprintf(location, sizeof(location), "[%s] %s: ", pa_thread_get_name(pa_thread_self()), pa_path_get_filename(file));
+        pa_snprintf(location, sizeof(location), "[%s] %s: ",
+                    pa_strnull(pa_thread_get_name(pa_thread_self())), pa_path_get_filename(file));
     else
         location[0] = 0;
 
@@ -395,35 +483,65 @@ void pa_log_levelv_meta(
             }
 
 #ifdef HAVE_SYSLOG_H
-            case PA_LOG_SYSLOG: {
-                char *local_t;
+            case PA_LOG_SYSLOG:
+                log_syslog(level, t, timestamp, location, bt);
+                break;
+#endif
 
-                openlog(ident, LOG_PID, LOG_USER);
+#ifdef HAVE_JOURNAL
+            case PA_LOG_JOURNAL:
+                if (sd_journal_send("MESSAGE=%s", t,
+                                "PRIORITY=%i", level_to_journal[level],
+                                "CODE_FILE=%s", file,
+                                "CODE_FUNC=%s", func,
+                                "CODE_LINE=%d", line,
+                                NULL) < 0) {
+#ifdef HAVE_SYSLOG_H
+                    pa_log_target new_target = { .type = PA_LOG_SYSLOG, .file = NULL };
+
+                    syslog(level_to_syslog[PA_LOG_ERROR], "%s%s%s", timestamp, __FILE__,
+                           "Error writing logs to the journal. Redirect log messages to syslog.");
+                    log_syslog(level, t, timestamp, location, bt);
+#else
+                    pa_log_target new_target = { .type = PA_LOG_STDERR, .file = NULL };
+
+                    saved_errno = errno;
+                    fprintf(stderr, "%s\n", "Error writing logs to the journal. Redirect log messages to console.");
+                    fprintf(stderr, "%s %s\n", metadata, t);
+#endif
+                    pa_log_set_target(&new_target);
+                }
+                break;
+#endif
+
+            case PA_LOG_FILE:
+            case PA_LOG_NEWFILE: {
+                char *local_t;
 
                 if ((local_t = pa_utf8_to_locale(t)))
                     t = local_t;
 
-                syslog(level_to_syslog[level], "%s%s%s%s", timestamp, location, t, pa_strempty(bt));
-                pa_xfree(local_t);
-
-                break;
-            }
-#endif
-
-            case PA_LOG_FD: {
                 if (log_fd >= 0) {
                     char metadata[256];
 
-                    pa_snprintf(metadata, sizeof(metadata), "\n%c %s %s", level_to_char[level], timestamp, location);
+                    if (_flags & PA_LOG_PRINT_LEVEL)
+                        pa_snprintf(metadata, sizeof(metadata), "%s%c: %s", timestamp, level_to_char[level], location);
+                    else
+                        pa_snprintf(metadata, sizeof(metadata), "%s%s", timestamp, location);
 
-                    if ((write(log_fd, metadata, strlen(metadata)) < 0) || (write(log_fd, t, strlen(t)) < 0)) {
+                    if ((pa_write(log_fd, metadata, strlen(metadata), &write_type) < 0)
+                            || (pa_write(log_fd, t, strlen(t), &write_type) < 0)
+                            || (bt && pa_write(log_fd, bt, strlen(bt), &write_type) < 0)
+                            || (pa_write(log_fd, "\n", 1, &write_type) < 0)) {
+                        pa_log_target new_target = { .type = PA_LOG_STDERR, .file = NULL };
                         saved_errno = errno;
-                        pa_log_set_fd(-1);
                         fprintf(stderr, "%s\n", "Error writing logs to a file descriptor. Redirect log messages to console.");
                         fprintf(stderr, "%s %s\n", metadata, t);
-                        pa_log_set_target(PA_LOG_STDERR);
+                        pa_log_set_target(&new_target);
                     }
                 }
+
+                pa_xfree(local_t);
 
                 break;
             }
@@ -462,14 +580,88 @@ void pa_log_level(pa_log_level_t level, const char *format, ...) {
     va_end(ap);
 }
 
-pa_bool_t pa_log_ratelimit(pa_log_level_t level) {
+bool pa_log_ratelimit(pa_log_level_t level) {
     /* Not more than 10 messages every 5s */
     static PA_DEFINE_RATELIMIT(ratelimit, 5 * PA_USEC_PER_SEC, 10);
 
     init_defaults();
 
     if (no_rate_limit)
-        return TRUE;
+        return true;
 
     return pa_ratelimit_test(&ratelimit, level);
+}
+
+pa_log_target *pa_log_target_new(pa_log_target_type_t type, const char *file) {
+    pa_log_target *t = NULL;
+
+    t = pa_xnew(pa_log_target, 1);
+
+    t->type = type;
+    t->file = pa_xstrdup(file);
+
+    return t;
+}
+
+void pa_log_target_free(pa_log_target *t) {
+    pa_assert(t);
+
+    pa_xfree(t->file);
+    pa_xfree(t);
+}
+
+pa_log_target *pa_log_parse_target(const char *string) {
+    pa_log_target *t = NULL;
+
+    pa_assert(string);
+
+    if (pa_streq(string, "stderr"))
+        t = pa_log_target_new(PA_LOG_STDERR, NULL);
+    else if (pa_streq(string, "syslog"))
+        t = pa_log_target_new(PA_LOG_SYSLOG, NULL);
+#ifdef HAVE_JOURNAL
+    else if (pa_streq(string, "journal"))
+        t = pa_log_target_new(PA_LOG_JOURNAL, NULL);
+#endif
+    else if (pa_streq(string, "null"))
+        t = pa_log_target_new(PA_LOG_NULL, NULL);
+    else if (pa_startswith(string, "file:"))
+        t = pa_log_target_new(PA_LOG_FILE, string + 5);
+    else if (pa_startswith(string, "newfile:"))
+        t = pa_log_target_new(PA_LOG_NEWFILE, string + 8);
+    else
+        pa_log(_("Invalid log target."));
+
+    return t;
+}
+
+char *pa_log_target_to_string(const pa_log_target *t) {
+    char *string = NULL;
+
+    pa_assert(t);
+
+    switch (t->type) {
+        case PA_LOG_STDERR:
+            string = pa_xstrdup("stderr");
+            break;
+        case PA_LOG_SYSLOG:
+            string = pa_xstrdup("syslog");
+            break;
+#ifdef HAVE_JOURNAL
+        case PA_LOG_JOURNAL:
+            string = pa_xstrdup("journal");
+            break;
+#endif
+        case PA_LOG_NULL:
+            string = pa_xstrdup("null");
+            break;
+        case PA_LOG_FILE:
+            string = pa_sprintf_malloc("file:%s", t->file);
+            break;
+        case PA_LOG_NEWFILE:
+            string = pa_sprintf_malloc("newfile:%s", t->file);
+            break;
+    }
+
+    return string;
 }

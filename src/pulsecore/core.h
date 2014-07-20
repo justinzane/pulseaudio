@@ -36,6 +36,7 @@ typedef enum pa_suspend_cause {
     PA_SUSPEND_IDLE = 4,         /* Used by module-suspend-on-idle */
     PA_SUSPEND_SESSION = 8,      /* Used by module-hal for mark inactive sessions */
     PA_SUSPEND_PASSTHROUGH = 16, /* Used to suspend monitor sources when the sink is in passthrough mode */
+    PA_SUSPEND_INTERNAL = 32,    /* This is used for short period server-internal suspends, such as for sample rate updates */
     PA_SUSPEND_ALL = 0xFFFF      /* Magic cause that can be used to resume forcibly */
 } pa_suspend_cause_t;
 
@@ -75,6 +76,8 @@ typedef enum pa_core_hook {
     PA_CORE_HOOK_SINK_PROPLIST_CHANGED,
     PA_CORE_HOOK_SINK_PORT_CHANGED,
     PA_CORE_HOOK_SINK_FLAGS_CHANGED,
+    PA_CORE_HOOK_SINK_VOLUME_CHANGED,
+    PA_CORE_HOOK_SINK_MUTE_CHANGED,
     PA_CORE_HOOK_SOURCE_NEW,
     PA_CORE_HOOK_SOURCE_FIXATE,
     PA_CORE_HOOK_SOURCE_PUT,
@@ -84,6 +87,8 @@ typedef enum pa_core_hook {
     PA_CORE_HOOK_SOURCE_PROPLIST_CHANGED,
     PA_CORE_HOOK_SOURCE_PORT_CHANGED,
     PA_CORE_HOOK_SOURCE_FLAGS_CHANGED,
+    PA_CORE_HOOK_SOURCE_VOLUME_CHANGED,
+    PA_CORE_HOOK_SOURCE_MUTE_CHANGED,
     PA_CORE_HOOK_SINK_INPUT_NEW,
     PA_CORE_HOOK_SINK_INPUT_FIXATE,
     PA_CORE_HOOK_SINK_INPUT_PUT,
@@ -94,6 +99,8 @@ typedef enum pa_core_hook {
     PA_CORE_HOOK_SINK_INPUT_MOVE_FAIL,
     PA_CORE_HOOK_SINK_INPUT_STATE_CHANGED,
     PA_CORE_HOOK_SINK_INPUT_PROPLIST_CHANGED,
+    PA_CORE_HOOK_SINK_INPUT_VOLUME_CHANGED,
+    PA_CORE_HOOK_SINK_INPUT_MUTE_CHANGED,
     PA_CORE_HOOK_SINK_INPUT_SEND_EVENT,
     PA_CORE_HOOK_SOURCE_OUTPUT_NEW,
     PA_CORE_HOOK_SOURCE_OUTPUT_FIXATE,
@@ -105,6 +112,8 @@ typedef enum pa_core_hook {
     PA_CORE_HOOK_SOURCE_OUTPUT_MOVE_FAIL,
     PA_CORE_HOOK_SOURCE_OUTPUT_STATE_CHANGED,
     PA_CORE_HOOK_SOURCE_OUTPUT_PROPLIST_CHANGED,
+    PA_CORE_HOOK_SOURCE_OUTPUT_VOLUME_CHANGED,
+    PA_CORE_HOOK_SOURCE_OUTPUT_MUTE_CHANGED,
     PA_CORE_HOOK_SOURCE_OUTPUT_SEND_EVENT,
     PA_CORE_HOOK_CLIENT_NEW,
     PA_CORE_HOOK_CLIENT_PUT,
@@ -161,7 +170,10 @@ struct pa_core {
     PA_LLIST_HEAD(pa_subscription_event, subscription_event_queue);
     pa_subscription_event *subscription_event_last;
 
-    pa_mempool *mempool;
+    /* The mempool is used for data we write to, it's readonly for the client.
+       The rw_mempool is used for data writable by both server and client (and
+       can be NULL in some cases). */
+    pa_mempool *mempool, *rw_mempool;
     pa_silence_cache silence_cache;
 
     pa_time_event *exit_event;
@@ -169,14 +181,14 @@ struct pa_core {
 
     int exit_idle_time, scache_idle_time;
 
-    pa_bool_t flat_volumes:1;
-    pa_bool_t disallow_module_loading:1;
-    pa_bool_t disallow_exit:1;
-    pa_bool_t running_as_daemon:1;
-    pa_bool_t realtime_scheduling:1;
-    pa_bool_t disable_remixing:1;
-    pa_bool_t disable_lfe_remixing:1;
-    pa_bool_t deferred_volume:1;
+    bool flat_volumes:1;
+    bool disallow_module_loading:1;
+    bool disallow_exit:1;
+    bool running_as_daemon:1;
+    bool realtime_scheduling:1;
+    bool disable_remixing:1;
+    bool disable_lfe_remixing:1;
+    bool deferred_volume:1;
 
     pa_resample_method_t resample_method;
     int realtime_priority;
@@ -196,12 +208,12 @@ enum {
     PA_CORE_MESSAGE_MAX
 };
 
-pa_core* pa_core_new(pa_mainloop_api *m, pa_bool_t shared, size_t shm_size);
+pa_core* pa_core_new(pa_mainloop_api *m, bool shared, size_t shm_size);
 
 /* Check whether no one is connected to this core */
 void pa_core_check_idle(pa_core *c);
 
-int pa_core_exit(pa_core *c, pa_bool_t force, int retval);
+int pa_core_exit(pa_core *c, bool force, int retval);
 
 void pa_core_maybe_vacuum(pa_core *c);
 

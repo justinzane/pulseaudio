@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # This file is part of PulseAudio.
 #
@@ -16,34 +16,10 @@
 # along with PulseAudio; if not, write to the Free Software Foundation,
 # Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
 
-VERSION=1.11
-
-run_versioned() {
-    local P
-    local V
-
-    V=$(echo "$2" | sed -e 's,\.,,g')
-
-    if [ -e "`which $1$V 2> /dev/null`" ] ; then
-        P="$1$V"
-    else
-    if [ -e "`which $1-$2 2> /dev/null`" ] ; then
-        P="$1-$2"
-    else
-        P="$1"
-    fi
-    fi
-
-    shift 2
-    "$P" "$@"
-}
-
-set -ex
-
 case $(uname) in
-    *Darwin*)
-        LIBTOOLIZE="glibtoolize"
-        ;;
+	*Darwin*)
+		LIBTOOLIZE="glibtoolize"
+		;;
 esac
 test "x$LIBTOOLIZE" = "x" && LIBTOOLIZE=libtoolize
 
@@ -68,37 +44,13 @@ if ! pkg-config --version &>/dev/null; then
 fi
 
 # Other necessary programs
-glib-gettextize --version >/dev/null || DIE=1
 intltoolize --version >/dev/null || DIE=1
-$LIBTOOLIZE --version >/dev/null || DIE=1
 test "$DIE" = 1 && exit 1
 
-if type -p colorgcc > /dev/null ; then
-   export CC=colorgcc
-fi
+autopoint --force
+AUTOPOINT='intltoolize --automake --copy' autoreconf --force --install --verbose
 
-if [ "x$1" = "xam" ] ; then
-    run_versioned automake "$VERSION" -a -c --foreign
-    ./config.status
-else
-    rm -rf autom4te.cache
-    rm -f config.cache
-
-    rm -f Makefile.am~ configure.ac~
-    glib-gettextize --copy --force
-    test -f Makefile.am~ && mv Makefile.am~ Makefile.am
-    test -f configure.ac~ && mv configure.ac~ configure.ac
-
-    touch config.rpath
-    intltoolize --copy --force --automake
-    "$LIBTOOLIZE" -c --force
-    run_versioned aclocal "$VERSION" -I m4
-    run_versioned autoconf 2.63 -Wall
-    run_versioned autoheader 2.63
-    run_versioned automake "$VERSION" --copy --foreign --add-missing
-
-    if test "x$NOCONFIGURE" = "x"; then
-        CFLAGS="-g -O0 $CFLAGS" ./configure --sysconfdir=/etc --localstatedir=/var --enable-force-preopen "$@"
-        make clean
-    fi
+if test "x$NOCONFIGURE" = "x"; then
+    CFLAGS="$CFLAGS -g -O0" ./configure --sysconfdir=/etc --localstatedir=/var --enable-force-preopen "$@"
+    make clean
 fi

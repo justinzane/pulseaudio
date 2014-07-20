@@ -51,7 +51,7 @@
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("UPnP MediaServer Plugin for Rygel");
 PA_MODULE_VERSION(PACKAGE_VERSION);
-PA_MODULE_LOAD_ONCE(TRUE);
+PA_MODULE_LOAD_ONCE(true);
 PA_MODULE_USAGE("display_name=<UPnP Media Server name>");
 
 /* This implements http://live.gnome.org/Rygel/MediaServer2Spec */
@@ -134,6 +134,7 @@ PA_MODULE_USAGE("display_name=<UPnP Media Server name>");
     " <interface name=\"org.gnome.UPnP.MediaItem2\">"                   \
     "  <property name=\"URLs\" type=\"as\" access=\"read\"/>"           \
     "  <property name=\"MIMEType\" type=\"s\" access=\"read\"/>"        \
+    "  <property name=\"DLNAProfile\" type=\"s\" access=\"read\"/>"        \
     " </interface>"                                                     \
     " <interface name=\"org.gnome.UPnP.MediaObject2\">"                 \
     "  <property name=\"Parent\" type=\"s\" access=\"read\"/>"          \
@@ -159,7 +160,6 @@ PA_MODULE_USAGE("display_name=<UPnP Media Server name>");
     " </interface>"                                                     \
     "</node>"
 
-
 static const char* const valid_modargs[] = {
     "display_name",
     NULL
@@ -170,7 +170,7 @@ struct userdata {
     pa_module *module;
 
     pa_dbus_connection *bus;
-    pa_bool_t got_name:1;
+    bool got_name:1;
 
     char *display_name;
 
@@ -211,7 +211,7 @@ static pa_hook_result_t source_new_or_unlink_cb(pa_core *c, pa_source *s, struct
     return PA_HOOK_OK;
 }
 
-static pa_bool_t message_is_property_get(DBusMessage *m, const char *interface, const char *property) {
+static bool message_is_property_get(DBusMessage *m, const char *interface, const char *property) {
     const char *i, *p;
     DBusError error;
 
@@ -220,17 +220,17 @@ static pa_bool_t message_is_property_get(DBusMessage *m, const char *interface, 
     pa_assert(m);
 
     if (!dbus_message_is_method_call(m, "org.freedesktop.DBus.Properties", "Get"))
-        return FALSE;
+        return false;
 
     if (!dbus_message_get_args(m, &error, DBUS_TYPE_STRING, &i, DBUS_TYPE_STRING, &p, DBUS_TYPE_INVALID) || dbus_error_is_set(&error)) {
         dbus_error_free(&error);
-        return FALSE;
+        return false;
     }
 
     return pa_streq(i, interface) && pa_streq(p, property);
 }
 
-static pa_bool_t message_is_property_get_all(DBusMessage *m, const char *interface) {
+static bool message_is_property_get_all(DBusMessage *m, const char *interface) {
     const char *i;
     DBusError error;
 
@@ -239,11 +239,11 @@ static pa_bool_t message_is_property_get_all(DBusMessage *m, const char *interfa
     pa_assert(m);
 
     if (!dbus_message_is_method_call(m, "org.freedesktop.DBus.Properties", "GetAll"))
-        return FALSE;
+        return false;
 
     if (!dbus_message_get_args(m, &error, DBUS_TYPE_STRING, &i, DBUS_TYPE_INVALID) || dbus_error_is_set(&error)) {
         dbus_error_free(&error);
-        return FALSE;
+        return false;
     }
 
     return pa_streq(i, interface);
@@ -473,7 +473,7 @@ static void append_property_dict_entry_item_display_name(DBusMessage *m, DBusMes
     pa_assert_se(dbus_message_iter_close_container(iter, &sub));
 }
 
-static pa_bool_t get_mediacontainer2_list_args(DBusMessage *m, unsigned *offset, unsigned *max_entries, char ***filter, int *filter_len) {
+static bool get_mediacontainer2_list_args(DBusMessage *m, unsigned *offset, unsigned *max_entries, char ***filter, int *filter_len) {
     DBusError error;
 
     dbus_error_init(&error);
@@ -485,10 +485,10 @@ static pa_bool_t get_mediacontainer2_list_args(DBusMessage *m, unsigned *offset,
 
     if (!dbus_message_get_args(m, &error, DBUS_TYPE_UINT32, offset, DBUS_TYPE_UINT32, max_entries, DBUS_TYPE_ARRAY, DBUS_TYPE_STRING, filter, filter_len, DBUS_TYPE_INVALID) || dbus_error_is_set(&error)) {
         dbus_error_free(&error);
-        return FALSE;
+        return false;
     }
 
-    return TRUE;
+    return true;
 }
 
 static unsigned get_sinks_or_sources_count(const char *path, const struct userdata *u) {
@@ -587,6 +587,7 @@ static void append_sink_or_source_item_properties(
         append_sink_or_source_item_mediaobject2_properties(r, &sub, path, sink, source);
         append_property_dict_entry_urls(r, &sub, user_data, sink, source);
         append_property_dict_entry_mime_type(r, &sub, sink, source);
+        append_property_dict_entry_string(r, &sub, "DLNAProfile", "LPCM");
     }
     else {
         for (int i = 0; i < filter_len; ++i) {
@@ -608,6 +609,9 @@ static void append_sink_or_source_item_properties(
             }
             else if (pa_streq(property_name, "MIMEType")) {
                 append_property_dict_entry_mime_type(r, &sub, sink, source);
+            }
+            else if (pa_streq(property_name, "DLNAProfile")) {
+                append_property_dict_entry_string(r, &sub, "DLNAProfile", "LPCM");
             }
         }
     }
@@ -988,6 +992,10 @@ static DBusHandlerResult sinks_and_sources_handler(DBusConnection *c, DBusMessag
             pa_assert_se(r = dbus_message_new_method_return(m));
             append_variant_mime_type(r, NULL, sink, source);
 
+        } else if (message_is_property_get(m, "org.gnome.UPnP.MediaItem2", "DLNAProfile")) {
+            pa_assert_se(r = dbus_message_new_method_return(m));
+            append_variant_string(r, NULL, "LPCM");
+
         } else if (message_is_property_get(m, "org.gnome.UPnP.MediaItem2", "URLs")) {
             pa_assert_se(r = dbus_message_new_method_return(m));
             append_variant_urls(r, NULL, u, sink, source);
@@ -1001,6 +1009,7 @@ static DBusHandlerResult sinks_and_sources_handler(DBusConnection *c, DBusMessag
             pa_assert_se(dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY, "{sv}", &sub));
 
             append_property_dict_entry_mime_type(r, &sub, sink, source);
+            append_property_dict_entry_string(r, &sub, "DLNAProfile", "LPCM");
             append_property_dict_entry_urls(r, &sub, u, sink, source);
 
             pa_assert_se(dbus_message_iter_close_container(&iter, &sub));
@@ -1072,7 +1081,7 @@ int pa__init(pa_module *m) {
         goto fail;
     }
 
-    u->got_name = TRUE;
+    u->got_name = true;
 
     pa_modargs_free(ma);
 

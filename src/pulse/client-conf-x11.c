@@ -37,14 +37,15 @@
 
 #include "client-conf-x11.h"
 
-int pa_client_conf_from_x11(pa_client_conf *c, const char *dname) {
+int pa_client_conf_from_x11(pa_client_conf *c) {
+    const char *dname;
     xcb_connection_t *xcb = NULL;
     int ret = -1, screen = 0;
     char t[1024];
 
     pa_assert(c);
 
-    if (!dname && !(dname = getenv("DISPLAY")))
+    if (!(dname = getenv("DISPLAY")))
         goto finish;
 
     if (*dname == 0)
@@ -61,7 +62,7 @@ int pa_client_conf_from_x11(pa_client_conf *c, const char *dname) {
     }
 
     if (pa_x11_get_prop(xcb, screen, "PULSE_SERVER", t, sizeof(t))) {
-        pa_bool_t disable_autospawn = TRUE;
+        bool disable_autospawn = true;
 
         pa_xfree(c->default_server);
         c->default_server = pa_xstrdup(t);
@@ -71,13 +72,13 @@ int pa_client_conf_from_x11(pa_client_conf *c, const char *dname) {
 
             if ((id = pa_session_id())) {
                 if (pa_streq(t, id))
-                    disable_autospawn = FALSE;
+                    disable_autospawn = false;
                 pa_xfree(id);
             }
         }
 
         if (disable_autospawn)
-            c->autospawn = FALSE;
+            c->autospawn = false;
     }
 
     if (pa_x11_get_prop(xcb, screen, "PULSE_SINK", t, sizeof(t))) {
@@ -91,20 +92,12 @@ int pa_client_conf_from_x11(pa_client_conf *c, const char *dname) {
     }
 
     if (pa_x11_get_prop(xcb, screen, "PULSE_COOKIE", t, sizeof(t))) {
-        uint8_t cookie[PA_NATIVE_COOKIE_LENGTH];
-
-        if (pa_parsehex(t, cookie, sizeof(cookie)) != sizeof(cookie)) {
+        if (pa_parsehex(t, c->cookie_from_x11, sizeof(c->cookie_from_x11)) != sizeof(c->cookie_from_x11)) {
             pa_log(_("Failed to parse cookie data"));
             goto finish;
         }
 
-        pa_assert(sizeof(cookie) == sizeof(c->cookie));
-        memcpy(c->cookie, cookie, sizeof(cookie));
-
-        c->cookie_valid = TRUE;
-
-        pa_xfree(c->cookie_file);
-        c->cookie_file = NULL;
+        c->cookie_from_x11_valid = true;
     }
 
     ret = 0;

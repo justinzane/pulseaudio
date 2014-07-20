@@ -28,10 +28,18 @@
 /* A structure containing configuration data for PulseAudio clients. */
 
 typedef struct pa_client_conf {
-    char *daemon_binary, *extra_arguments, *default_sink, *default_source, *default_server, *default_dbus_server, *cookie_file;
-    pa_bool_t autospawn, disable_shm, auto_connect_localhost, auto_connect_display;
-    uint8_t cookie[PA_NATIVE_COOKIE_LENGTH];
-    pa_bool_t cookie_valid; /* non-zero, when cookie is valid */
+    char *daemon_binary;
+    char *extra_arguments;
+    char *default_sink;
+    char *default_source;
+    char *default_server;
+    char *default_dbus_server;
+    char *cookie_file_from_env;
+    uint8_t cookie_from_x11[PA_NATIVE_COOKIE_LENGTH];
+    bool cookie_from_x11_valid;
+    char *cookie_file_from_application;
+    char *cookie_file_from_client_conf;
+    bool autospawn, disable_shm, auto_connect_localhost, auto_connect_display;
     size_t shm_size;
 } pa_client_conf;
 
@@ -39,16 +47,17 @@ typedef struct pa_client_conf {
 pa_client_conf *pa_client_conf_new(void);
 void pa_client_conf_free(pa_client_conf *c);
 
-/* Load the configuration data from the specified file, overwriting
- * the current settings in *c. When the filename is NULL, the
- * default client configuration file name is used. */
-int pa_client_conf_load(pa_client_conf *c, const char *filename);
+/* Load the configuration data from the client configuration file and
+ * optionally from X11 and/or environment variables, overwriting the current
+ * settings in *c. */
+void pa_client_conf_load(pa_client_conf *c, bool load_from_x11, bool load_from_env);
 
-/* Load the configuration data from the environment of the current
-   process, overwriting the current settings in *c. */
-int pa_client_conf_env(pa_client_conf *c);
+/* Load the cookie from the cookie sources specified in the configuration, or
+ * if nothing is specified or none of the sources work, load the cookie from
+ * the default source. If the default source doesn't work either, this function
+ * returns a negative value and initializes the cookie to all-zeroes. */
+int pa_client_conf_load_cookie(pa_client_conf *c, uint8_t *cookie, size_t cookie_length);
 
-/* Load cookie data from c->cookie_file into c->cookie */
-int pa_client_conf_load_cookie(pa_client_conf* c);
+void pa_client_conf_set_cookie_file_from_application(pa_client_conf *c, const char *cookie_file);
 
 #endif

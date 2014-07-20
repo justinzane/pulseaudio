@@ -50,7 +50,7 @@
 PA_MODULE_AUTHOR("Daniel Mack");
 PA_MODULE_DESCRIPTION("Mac OS X Bonjour Service Publisher");
 PA_MODULE_VERSION(PACKAGE_VERSION);
-PA_MODULE_LOAD_ONCE(TRUE);
+PA_MODULE_LOAD_ONCE(true);
 
 #define SERVICE_TYPE_SINK "_pulse-sink._tcp"
 #define SERVICE_TYPE_SOURCE "_pulse-source._tcp"
@@ -183,13 +183,13 @@ static uint16_t compute_port(struct userdata *u) {
             a.port > 0) {
 
             pa_xfree(a.path_or_host);
-            return a.port;
+            return htons(a.port);
         }
 
         pa_xfree(a.path_or_host);
     }
 
-    return PA_NATIVE_DEFAULT_PORT;
+    return htons(PA_NATIVE_DEFAULT_PORT);
 }
 
 static int publish_service(struct service *s) {
@@ -330,7 +330,7 @@ static void service_free(struct service *s) {
     pa_xfree(s);
 }
 
-static pa_bool_t shall_ignore(pa_object *o) {
+static bool shall_ignore(pa_object *o) {
     pa_object_assert_ref(o);
 
     if (pa_sink_isinstance(o))
@@ -490,7 +490,7 @@ void pa__done(pa_module*m) {
     unpublish_all_services(u);
 
     if (u->services)
-        pa_hashmap_free(u->services, NULL);
+        pa_hashmap_free(u->services);
 
     if (u->sink_new_slot)
         pa_hook_slot_free(u->sink_new_slot);

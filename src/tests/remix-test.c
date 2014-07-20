@@ -52,7 +52,7 @@ int main(int argc, char *argv[]) {
 
     pa_log_set_level(PA_LOG_DEBUG);
 
-    pa_assert_se(pool = pa_mempool_new(FALSE, 0));
+    pa_assert_se(pool = pa_mempool_new(false, 0));
 
     for (i = 0; maps[i].channels > 0; i++)
         for (j = 0; maps[j].channels > 0; j++) {
@@ -75,7 +75,6 @@ int main(int argc, char *argv[]) {
 
             pa_resampler_free(r);
         }
-
 
     pa_mempool_free(pool);
 

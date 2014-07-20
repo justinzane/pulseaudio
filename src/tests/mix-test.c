@@ -35,7 +35,6 @@
 #include <pulsecore/sample-util.h>
 #include <pulsecore/mix.h>
 
-
 /* PA_SAMPLE_U8 */
 static const uint8_t u8_result[3][10] = {
 { 0x00, 0xff, 0x7f, 0x80, 0x9f, 0x3f, 0x01, 0xf0, 0x20, 0x21 },
@@ -408,7 +407,7 @@ START_TEST (mix_test) {
     if (!getenv("MAKE_CHECK"))
         pa_log_set_level(PA_LOG_DEBUG);
 
-    fail_unless((pool = pa_mempool_new(FALSE, 0)) != NULL, NULL);
+    fail_unless((pool = pa_mempool_new(false, 0)) != NULL, NULL);
 
     a.channels = 1;
     a.rate = 44100;
@@ -452,7 +451,7 @@ START_TEST (mix_test) {
         k.index = 0;
 
         ptr = pa_memblock_acquire_chunk(&k);
-        pa_mix(m, 2, ptr, k.length, &a, NULL, FALSE);
+        pa_mix(m, 2, ptr, k.length, &a, NULL, false);
         pa_memblock_release(k.memblock);
 
         compare_block(&a, &k, 2);

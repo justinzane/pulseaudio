@@ -59,9 +59,6 @@
 #endif
 
 #include <pulse/client-conf.h>
-#ifdef HAVE_X11
-#include <pulse/client-conf-x11.h>
-#endif
 #include <pulse/mainloop.h>
 #include <pulse/mainloop-signal.h>
 #include <pulse/timeval.h>
@@ -112,27 +109,6 @@ int deny_severity = LOG_WARNING;
  * itself if it finds it and it is set to 7 (which is actually a bit
  * mask). For details see padsp. */
 int __padsp_disabled__ = 7;
-#endif
-
-#ifdef OS_IS_WIN32
-
-static void message_cb(pa_mainloop_api*a, pa_time_event*e, const struct timeval *tv, void *userdata) {
-    MSG msg;
-    struct timeval tvnext;
-
-    while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-        if (msg.message == WM_QUIT)
-            raise(SIGTERM);
-        else {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-    }
-
-    pa_timeval_add(pa_gettimeofday(&tvnext), 100000);
-    a->time_restart(e, &tvnext);
-}
-
 #endif
 
 static void signal_callback(pa_mainloop_api*m, pa_signal_event *e, int sig, void *userdata) {
@@ -202,12 +178,12 @@ static int change_user(void) {
     if (!pa_streq(pw->pw_dir, PA_SYSTEM_RUNTIME_PATH))
         pa_log_warn(_("Home directory of user '%s' is not '%s', ignoring."), PA_SYSTEM_USER, PA_SYSTEM_RUNTIME_PATH);
 
-    if (pa_make_secure_dir(PA_SYSTEM_RUNTIME_PATH, 0755, pw->pw_uid, gr->gr_gid, TRUE) < 0) {
+    if (pa_make_secure_dir(PA_SYSTEM_RUNTIME_PATH, 0755, pw->pw_uid, gr->gr_gid, true) < 0) {
         pa_log(_("Failed to create '%s': %s"), PA_SYSTEM_RUNTIME_PATH, pa_cstrerror(errno));
         return -1;
     }
 
-    if (pa_make_secure_dir(PA_SYSTEM_STATE_PATH, 0700, pw->pw_uid, gr->gr_gid, TRUE) < 0) {
+    if (pa_make_secure_dir(PA_SYSTEM_STATE_PATH, 0700, pw->pw_uid, gr->gr_gid, true) < 0) {
         pa_log(_("Failed to create '%s': %s"), PA_SYSTEM_STATE_PATH, pa_cstrerror(errno));
         return -1;
     }
@@ -346,11 +322,7 @@ static char *check_configured_address(void) {
     char *default_server = NULL;
     pa_client_conf *c = pa_client_conf_new();
 
-    pa_client_conf_load(c, NULL);
-#ifdef HAVE_X11
-    pa_client_conf_from_x11(c, NULL);
-#endif
-    pa_client_conf_env(c);
+    pa_client_conf_load(c, true, true);
 
     if (c->default_server && *c->default_server)
         default_server = pa_xstrdup(c->default_server);
@@ -402,25 +374,21 @@ int main(int argc, char *argv[]) {
     char *s;
     char *configured_address;
     int r = 0, retval = 1, d = 0;
-    pa_bool_t valid_pid_file = FALSE;
-    pa_bool_t ltdl_init = FALSE;
+    bool valid_pid_file = false;
+    bool ltdl_init = false;
     int passed_fd = -1;
     const char *e;
 #ifdef HAVE_FORK
     int daemon_pipe[2] = { -1, -1 };
     int daemon_pipe2[2] = { -1, -1 };
 #endif
-#ifdef OS_IS_WIN32
-    pa_time_event *win32_timer;
-    struct timeval win32_tv;
-#endif
     int autospawn_fd = -1;
-    pa_bool_t autospawn_locked = FALSE;
+    bool autospawn_locked = false;
 #ifdef HAVE_DBUS
     pa_dbusobj_server_lookup *server_lookup = NULL; /* /org/pulseaudio/server_lookup */
     pa_dbus_connection *lookup_service_bus = NULL; /* Always the user bus. */
     pa_dbus_connection *server_bus = NULL; /* The bus where we reserve org.pulseaudio.Server, either the user or the system bus. */
-    pa_bool_t start_server;
+    bool start_server;
 #endif
 
     pa_log_set_ident("pulseaudio");
@@ -499,8 +467,14 @@ int main(int argc, char *argv[]) {
         goto finish;
     }
 
+    if (conf->log_target)
+        pa_log_set_target(conf->log_target);
+    else {
+        pa_log_target target = { .type = PA_LOG_STDERR, .file = NULL };
+        pa_log_set_target(&target);
+    }
+
     pa_log_set_level(conf->log_level);
-    pa_log_set_target(conf->auto_log_target ? PA_LOG_STDERR : conf->log_target);
     if (conf->log_meta)
         pa_log_set_flags(PA_LOG_PRINT_META, PA_LOG_SET);
     if (conf->log_time)
@@ -516,10 +490,10 @@ int main(int argc, char *argv[]) {
             break;
         case PA_SERVER_TYPE_USER:
         case PA_SERVER_TYPE_NONE:
-            conf->system_instance = FALSE;
+            conf->system_instance = false;
             break;
         case PA_SERVER_TYPE_SYSTEM:
-            conf->system_instance = TRUE;
+            conf->system_instance = true;
             break;
         default:
             pa_assert_not_reached();
@@ -529,13 +503,13 @@ int main(int argc, char *argv[]) {
 
     if (!start_server && conf->local_server_type == PA_SERVER_TYPE_SYSTEM) {
         pa_log_notice(_("System mode refused for non-root user. Only starting the D-Bus server lookup service."));
-        conf->system_instance = FALSE;
+        conf->system_instance = false;
     }
 #endif
 
     LTDL_SET_PRELOADED_SYMBOLS();
     pa_ltdl_init();
-    ltdl_init = TRUE;
+    ltdl_init = true;
 
     if (conf->dl_search_path)
         lt_dlsetsearchpath(conf->dl_search_path);
@@ -679,7 +653,7 @@ int main(int argc, char *argv[]) {
          * recover (i.e. autospawn) from a crash.
          */
         char *ufn;
-        pa_bool_t start_anyway = FALSE;
+        bool start_anyway = false;
 
         if ((ufn = pa_runtime_path(PA_NATIVE_DEFAULT_UNIX_SOCKET))) {
             char *id;
@@ -724,7 +698,7 @@ int main(int argc, char *argv[]) {
 
     if (conf->system_instance && !conf->disable_shm) {
         pa_log_notice(_("Running in system mode, forcibly disabling SHM mode!"));
-        conf->disable_shm = TRUE;
+        conf->disable_shm = true;
     }
 
     if (conf->system_instance && conf->exit_idle_time >= 0) {
@@ -742,12 +716,12 @@ int main(int argc, char *argv[]) {
             goto finish;
         }
 
-        if ((pa_autospawn_lock_acquire(TRUE) < 0)) {
+        if ((pa_autospawn_lock_acquire(true) < 0)) {
             pa_log("Failed to acquire autospawn lock");
             goto finish;
         }
 
-        autospawn_locked = TRUE;
+        autospawn_locked = true;
     }
 
     if (conf->daemonize) {
@@ -800,9 +774,9 @@ int main(int argc, char *argv[]) {
              * to close it in the child */
 
             pa_autospawn_lock_release();
-            pa_autospawn_lock_done(TRUE);
+            pa_autospawn_lock_done(true);
 
-            autospawn_locked = FALSE;
+            autospawn_locked = false;
             autospawn_fd = -1;
         }
 
@@ -810,8 +784,14 @@ int main(int argc, char *argv[]) {
         daemon_pipe[0] = -1;
 #endif
 
-        if (conf->auto_log_target)
-            pa_log_set_target(PA_LOG_SYSLOG);
+        if (!conf->log_target) {
+#ifdef HAVE_JOURNAL
+            pa_log_target target = { .type = PA_LOG_JOURNAL, .file = NULL };
+#else
+            pa_log_target target = { .type = PA_LOG_SYSLOG, .file = NULL };
+#endif
+            pa_log_set_target(&target);
+        }
 
 #ifdef HAVE_SETSID
         if (setsid() < 0) {
@@ -892,7 +872,8 @@ int main(int argc, char *argv[]) {
 #endif
     pa_rtclock_hrtimer_enable();
 
-    pa_raise_priority(conf->nice_level);
+    if (conf->high_priority)
+        pa_raise_priority(conf->nice_level);
 
     if (conf->system_instance)
         if (change_user() < 0)
@@ -984,7 +965,7 @@ int main(int argc, char *argv[]) {
             goto finish;
         }
 
-        valid_pid_file = TRUE;
+        valid_pid_file = true;
     }
 
     pa_disable_sigpipe();
@@ -995,7 +976,7 @@ int main(int argc, char *argv[]) {
         pa_log_info(_("Dude, your kernel stinks! The chef's recommendation today is Linux with high-resolution timers enabled!"));
 
     if (conf->lock_memory) {
-#ifdef HAVE_SYS_MMAN_H
+#if defined(HAVE_SYS_MMAN_H) && !defined(__ANDROID__)
         if (mlockall(MCL_FUTURE) < 0)
             pa_log_warn("mlockall() failed: %s", pa_cstrerror(errno));
         else
@@ -1042,7 +1023,7 @@ int main(int argc, char *argv[]) {
             c->cpu_info.cpu_type = PA_CPU_X86;
         if (pa_cpu_init_arm(&(c->cpu_info.flags.arm)))
             c->cpu_info.cpu_type = PA_CPU_ARM;
-	pa_cpu_init_orc(c->cpu_info);
+        pa_cpu_init_orc(c->cpu_info);
     }
 
     pa_assert_se(pa_signal_init(pa_mainloop_get_api(mainloop)) == 0);
@@ -1056,10 +1037,6 @@ int main(int argc, char *argv[]) {
 #endif
 #ifdef SIGHUP
     pa_signal_new(SIGHUP, signal_callback, c);
-#endif
-
-#ifdef OS_IS_WIN32
-    win32_timer = pa_mainloop_get_api(mainloop)->time_new(pa_mainloop_get_api(mainloop), pa_gettimeofday(&win32_tv), message_cb, NULL);
 #endif
 
     if (!conf->no_cpu_limit)
@@ -1102,7 +1079,7 @@ int main(int argc, char *argv[]) {
          * any modules to be loaded. We haven't loaded any so far, so one might
          * think there's no way to contact the server, but receiving certain
          * signals could still cause modules to load. */
-        conf->disallow_module_loading = TRUE;
+        conf->disallow_module_loading = true;
     }
 #endif
 
@@ -1153,13 +1130,8 @@ finish:
         if (autospawn_locked)
             pa_autospawn_lock_release();
 
-        pa_autospawn_lock_done(FALSE);
+        pa_autospawn_lock_done(false);
     }
-
-#ifdef OS_IS_WIN32
-    if (mainloop && win32_timer)
-        pa_mainloop_get_api(mainloop)->time_free(win32_timer);
-#endif
 
     if (c) {
         /* Ensure all the modules/samples are unloaded when the core is still ref'ed,

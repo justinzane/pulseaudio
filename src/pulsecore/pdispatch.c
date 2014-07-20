@@ -107,7 +107,7 @@ static const char *command_names[PA_COMMAND_MAX] = {
 
     [PA_COMMAND_KILL_CLIENT] = "KILL_CLIENT",
     [PA_COMMAND_KILL_SINK_INPUT] = "KILL_SINK_INPUT",
-    [PA_COMMAND_KILL_SOURCE_OUTPUT] = "SOURCE_OUTPUT",
+    [PA_COMMAND_KILL_SOURCE_OUTPUT] = "KILL_SOURCE_OUTPUT",
 
     [PA_COMMAND_LOAD_MODULE] = "LOAD_MODULE",
     [PA_COMMAND_UNLOAD_MODULE] = "UNLOAD_MODULE",
@@ -157,7 +157,7 @@ static const char *command_names[PA_COMMAND_MAX] = {
 
     /* Supported since protocol v13 (0.9.11) */
     [PA_COMMAND_UPDATE_RECORD_STREAM_PROPLIST] = "UPDATE_RECORD_STREAM_PROPLIST",
-    [PA_COMMAND_UPDATE_PLAYBACK_STREAM_PROPLIST] = "UPDATE_RECORD_STREAM_PROPLIST",
+    [PA_COMMAND_UPDATE_PLAYBACK_STREAM_PROPLIST] = "UPDATE_PLAYBACK_STREAM_PROPLIST",
     [PA_COMMAND_UPDATE_CLIENT_PROPLIST] = "UPDATE_CLIENT_PROPLIST",
     [PA_COMMAND_REMOVE_RECORD_STREAM_PROPLIST] = "REMOVE_RECORD_STREAM_PROPLIST",
     [PA_COMMAND_REMOVE_PLAYBACK_STREAM_PROPLIST] = "REMOVE_PLAYBACK_STREAM_PROPLIST",
@@ -174,7 +174,7 @@ static const char *command_names[PA_COMMAND_MAX] = {
     [PA_COMMAND_GET_CARD_INFO_LIST] = "GET_CARD_INFO_LIST",
     [PA_COMMAND_SET_CARD_PROFILE] = "SET_CARD_PROFILE",
 
-    [PA_COMMAND_CLIENT_EVENT] = "GET_CLIENT_EVENT",
+    [PA_COMMAND_CLIENT_EVENT] = "CLIENT_EVENT",
     [PA_COMMAND_PLAYBACK_STREAM_EVENT] = "PLAYBACK_STREAM_EVENT",
     [PA_COMMAND_RECORD_STREAM_EVENT] = "RECORD_STREAM_EVENT",
 
@@ -190,6 +190,13 @@ static const char *command_names[PA_COMMAND_MAX] = {
     [PA_COMMAND_SET_SOURCE_OUTPUT_VOLUME] = "SET_SOURCE_OUTPUT_VOLUME",
     [PA_COMMAND_SET_SOURCE_OUTPUT_MUTE] = "SET_SOURCE_OUTPUT_MUTE",
 
+    /* Supported since protocol v27 (3.0) */
+    [PA_COMMAND_SET_PORT_LATENCY_OFFSET] = "SET_PORT_LATENCY_OFFSET",
+
+    /* Supported since protocol v30 (6.0) */
+    /* BOTH DIRECTIONS */
+    [PA_COMMAND_ENABLE_SRBCHANNEL] = "ENABLE_SRBCHANNEL",
+    [PA_COMMAND_DISABLE_SRBCHANNEL] = "DISABLE_SRBCHANNEL",
 };
 
 #endif
@@ -214,8 +221,8 @@ struct pa_pdispatch {
     PA_LLIST_HEAD(struct reply_info, replies);
     pa_pdispatch_drain_cb_t drain_callback;
     void *drain_userdata;
-    const pa_creds *creds;
-    pa_bool_t use_rtclock;
+    const pa_ancil *ancil;
+    bool use_rtclock;
 };
 
 static void reply_info_free(struct reply_info *r) {
@@ -232,7 +239,7 @@ static void reply_info_free(struct reply_info *r) {
         pa_xfree(r);
 }
 
-pa_pdispatch* pa_pdispatch_new(pa_mainloop_api *mainloop, pa_bool_t use_rtclock, const pa_pdispatch_cb_t *table, unsigned entries) {
+pa_pdispatch* pa_pdispatch_new(pa_mainloop_api *mainloop, bool use_rtclock, const pa_pdispatch_cb_t *table, unsigned entries) {
     pa_pdispatch *pd;
 
     pa_assert(mainloop);
@@ -284,7 +291,7 @@ static void run_action(pa_pdispatch *pd, struct reply_info *r, uint32_t command,
     pa_pdispatch_unref(pd);
 }
 
-int pa_pdispatch_run(pa_pdispatch *pd, pa_packet*packet, const pa_creds *creds, void *userdata) {
+int pa_pdispatch_run(pa_pdispatch *pd, pa_packet*packet, const pa_ancil *ancil, void *userdata) {
     uint32_t tag, command;
     pa_tagstruct *ts = NULL;
     int ret = -1;
@@ -318,7 +325,7 @@ int pa_pdispatch_run(pa_pdispatch *pd, pa_packet*packet, const pa_creds *creds, 
 }
 #endif
 
-    pd->creds = creds;
+    pd->ancil = ancil;
 
     if (command == PA_COMMAND_ERROR || command == PA_COMMAND_REPLY) {
         struct reply_info *r;
@@ -342,7 +349,7 @@ int pa_pdispatch_run(pa_pdispatch *pd, pa_packet*packet, const pa_creds *creds, 
     ret = 0;
 
 finish:
-    pd->creds = NULL;
+    pd->ancil = NULL;
 
     if (ts)
         pa_tagstruct_free(ts);
@@ -431,9 +438,29 @@ pa_pdispatch* pa_pdispatch_ref(pa_pdispatch *pd) {
     return pd;
 }
 
+#ifdef HAVE_CREDS
+
 const pa_creds * pa_pdispatch_creds(pa_pdispatch *pd) {
     pa_assert(pd);
     pa_assert(PA_REFCNT_VALUE(pd) >= 1);
 
-    return pd->creds;
+    if (pd->ancil && pd->ancil->creds_valid)
+         return &pd->ancil->creds;
+    return NULL;
 }
+
+const int * pa_pdispatch_fds(pa_pdispatch *pd, int *nfd) {
+    pa_assert(pd);
+    pa_assert(PA_REFCNT_VALUE(pd) >= 1);
+    pa_assert(nfd);
+
+    if (pd->ancil) {
+         *nfd = pd->ancil->nfd;
+         return pd->ancil->fds;
+    }
+
+    *nfd = 0;
+    return NULL;
+}
+
+#endif

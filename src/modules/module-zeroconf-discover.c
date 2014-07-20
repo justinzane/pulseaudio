@@ -49,7 +49,7 @@
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("mDNS/DNS-SD Service Discovery");
 PA_MODULE_VERSION(PACKAGE_VERSION);
-PA_MODULE_LOAD_ONCE(TRUE);
+PA_MODULE_LOAD_ONCE(true);
 
 #define SERVICE_TYPE_SINK "_pulse-sink._tcp"
 #define SERVICE_TYPE_SOURCE "_non-monitor._sub._pulse-source._tcp"
@@ -149,11 +149,12 @@ static void resolver_cb(
     else {
         char *device = NULL, *dname, *module_name, *args;
         const char *t;
+        char *if_suffix = NULL;
         char at[AVAHI_ADDRESS_STR_MAX], cmt[PA_CHANNEL_MAP_SNPRINT_MAX];
         pa_sample_spec ss;
         pa_channel_map cm;
         AvahiStringList *l;
-        pa_bool_t channel_map_set = FALSE;
+        bool channel_map_set = false;
         pa_module *m;
 
         ss = u->core->default_sample_spec;
@@ -175,7 +176,7 @@ static void resolver_cb(
                 ss.format = pa_parse_sample_format(value);
             else if (pa_streq(key, "channel_map")) {
                 pa_channel_map_parse(&cm, value);
-                channel_map_set = TRUE;
+                channel_map_set = true;
             }
 
             avahi_free(key);
@@ -210,16 +211,21 @@ static void resolver_cb(
         }
 
         t = strstr(type, "sink") ? "sink" : "source";
+        if (a->proto == AVAHI_PROTO_INET6 &&
+            a->data.ipv6.address[0] == 0xfe &&
+            (a->data.ipv6.address[1] & 0xc0) == 0x80)
+            if_suffix = pa_sprintf_malloc("%%%d", interface);
 
         module_name = pa_sprintf_malloc("module-tunnel-%s", t);
-        args = pa_sprintf_malloc("server=[%s]:%u "
+        args = pa_sprintf_malloc("server=[%s%s]:%u "
                                  "%s=%s "
                                  "format=%s "
                                  "channels=%u "
                                  "rate=%u "
                                  "%s_name=%s "
                                  "channel_map=%s",
-                                 avahi_address_snprint(at, sizeof(at), a), port,
+                                 avahi_address_snprint(at, sizeof(at), a),
+                                 if_suffix ? if_suffix : "", port,
                                  t, device,
                                  pa_sample_format_to_string(ss.format),
                                  ss.channels,
@@ -238,6 +244,7 @@ static void resolver_cb(
         pa_xfree(module_name);
         pa_xfree(dname);
         pa_xfree(args);
+        pa_xfree(if_suffix);
         avahi_free(device);
     }
 
@@ -281,7 +288,7 @@ static void browser_cb(
         struct tunnel *t2;
 
         if ((t2 = pa_hashmap_get(u->tunnels, t))) {
-            pa_module_unload_request_by_index(u->core, t2->module_index, TRUE);
+            pa_module_unload_request_by_index(u->core, t2->module_index, true);
             pa_hashmap_remove(u->tunnels, t2);
             tunnel_free(t2);
         }
@@ -314,7 +321,7 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *userda
                               browser_cb, u))) {
 
                     pa_log("avahi_service_browser_new() failed: %s", avahi_strerror(avahi_client_errno(c)));
-                    pa_module_unload_request(u->module, TRUE);
+                    pa_module_unload_request(u->module, true);
                 }
             }
 
@@ -329,7 +336,7 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *userda
                               browser_cb, u))) {
 
                     pa_log("avahi_service_browser_new() failed: %s", avahi_strerror(avahi_client_errno(c)));
-                    pa_module_unload_request(u->module, TRUE);
+                    pa_module_unload_request(u->module, true);
                 }
             }
 
@@ -343,7 +350,7 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *userda
 
                 if (!(u->client = avahi_client_new(u->avahi_poll, AVAHI_CLIENT_NO_FAIL, client_callback, u, &error))) {
                     pa_log("avahi_client_new() failed: %s", avahi_strerror(error));
-                    pa_module_unload_request(u->module, TRUE);
+                    pa_module_unload_request(u->module, true);
                 }
             }
 
@@ -422,11 +429,11 @@ void pa__done(pa_module*m) {
         struct tunnel *t;
 
         while ((t = pa_hashmap_steal_first(u->tunnels))) {
-            pa_module_unload_request_by_index(u->core, t->module_index, TRUE);
+            pa_module_unload_request_by_index(u->core, t->module_index, true);
             tunnel_free(t);
         }
 
-        pa_hashmap_free(u->tunnels, NULL);
+        pa_hashmap_free(u->tunnels);
     }
 
     pa_xfree(u);

@@ -32,16 +32,15 @@ USA.
   <description>
     <p>
       PulseAudio provides a simple command line language used by configuration
-      scripts and the pacmd interactive shell, and the modules module-cli and
+      scripts, the pacmd interactive shell, and the modules module-cli and
       module-cli-protocol-{unix,tcp}. Empty lines and lines beginning with a
       hashmark (#) are silently ignored. Several commands are supported.
     </p>
 
     <p>
-      Note that any boolean arguments can be given positively as '1', 'on' or any
-      word starting with the letters 't' or 'y'. Likewise, negative values can be
-      given as '0', 'off' or any word starting with the letters 'f' or 'n'.
-      Case is ignored.
+      Note that any boolean arguments can be given positively as '1', 't', 'y',
+      'true', 'yes' or 'on'. Likewise, negative values can be given as '0',
+      'f', 'n', 'false', 'no' or 'off'. Case is ignored.
     </p>
   </description>
 
@@ -264,7 +263,8 @@ USA.
 
     <option>
       <p><opt>set-log-target</opt> <arg>target</arg></p>
-      <optdesc><p>Change the log target (null, auto, syslog, stderr, file:PATH).</p></optdesc>
+      <optdesc><p>Change the log target (null, auto, journal, syslog, stderr,
+      file:PATH, newfile:PATH).</p></optdesc>
     </option>
 
     <option>
@@ -308,7 +308,7 @@ USA.
 
   <section name="Meta Commands">
     <p>
-      In addition the commands described above there a few meta directives
+      In addition to the commands described above there are a few meta directives
       supported by the command line interpreter.
     </p>
     <option>

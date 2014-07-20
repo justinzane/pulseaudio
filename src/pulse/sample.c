@@ -52,8 +52,7 @@ static const size_t size_table[] = {
 };
 
 size_t pa_sample_size_of_format(pa_sample_format_t f) {
-    pa_assert(f >= 0);
-    pa_assert(f < PA_SAMPLE_MAX);
+    pa_assert(pa_sample_format_valid(f));
 
     return size_table[f];
 }
@@ -104,15 +103,24 @@ pa_sample_spec* pa_sample_spec_init(pa_sample_spec *spec) {
     return spec;
 }
 
+int pa_sample_format_valid(unsigned format) {
+    return format < PA_SAMPLE_MAX;
+}
+
+int pa_sample_rate_valid(uint32_t rate) {
+    return rate > 0 && rate <= PA_RATE_MAX;
+}
+
+int pa_channels_valid(uint8_t channels) {
+    return channels > 0 && channels <= PA_CHANNELS_MAX;
+}
+
 int pa_sample_spec_valid(const pa_sample_spec *spec) {
     pa_assert(spec);
 
-    if (PA_UNLIKELY (spec->rate <= 0 ||
-        spec->rate > PA_RATE_MAX ||
-        spec->channels <= 0 ||
-        spec->channels > PA_CHANNELS_MAX ||
-        spec->format >= PA_SAMPLE_MAX ||
-        spec->format < 0))
+    if (PA_UNLIKELY(!pa_sample_rate_valid(spec->rate) ||
+        !pa_channels_valid(spec->channels) ||
+        !pa_sample_format_valid(spec->format)))
         return 0;
 
     return 1;
@@ -152,7 +160,7 @@ const char *pa_sample_format_to_string(pa_sample_format_t f) {
         [PA_SAMPLE_S24_32BE] = "s24-32be",
     };
 
-    if (f < 0 || f >= PA_SAMPLE_MAX)
+    if (!pa_sample_format_valid(f))
         return NULL;
 
     return table[f];
@@ -245,8 +253,7 @@ pa_sample_format_t pa_parse_sample_format(const char *format) {
 }
 
 int pa_sample_format_is_le(pa_sample_format_t f) {
-    pa_assert(f >= PA_SAMPLE_U8);
-    pa_assert(f < PA_SAMPLE_MAX);
+    pa_assert(pa_sample_format_valid(f));
 
     switch (f) {
         case PA_SAMPLE_S16LE:

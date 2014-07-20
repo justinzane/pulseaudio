@@ -259,7 +259,7 @@ _pacmd() {
     local cur prev words cword preprev command
     local comps
     local flags='-h --help --version'
-    local commands=(exit help list-modules list-sinks list-sources list-clients
+    local commands=(exit help list-modules list-cards list-sinks list-sources list-clients
                     list-samples list-sink-inputs list-source-outputs stat info
                     load-module unload-module describe-module set-sink-volume
                     set-source-volume set-sink-input-volume set-source-output-volume
@@ -439,7 +439,7 @@ _pacat () {
                 --rate= --format= --channels= --channel-map= --fix-format --fix-rate
                 --fix-channels --no-remix --no-remap --latency= --process-time=
                 --latency-msec= --process-time-msec= --property= --raw --passthrough
-                --file-format= --list-file-formats'
+                --file-format= --list-file-formats --monitor-stream='
 
     _init_completion -n = || return
 
@@ -452,7 +452,13 @@ _pacat () {
         --device=*)
             cur=${cur#*=}
             comps=$(__sinks)
-            comps+=$(__sources)
+            comps+=" "$(__sources)
+            COMPREPLY=($(compgen -W '${comps[*]}' -- "$cur"))
+            ;;
+
+        --monitor-stream=*)
+            cur=${cur#*=}
+            comps=$(__sink_inputs)
             COMPREPLY=($(compgen -W '${comps[*]}' -- "$cur"))
             ;;
 
@@ -481,12 +487,12 @@ _pacat () {
         -s) _known_hosts_real "$cur" ;;
         -d)
             comps=$(__sinks)
-            comps+=$(__sources)
+            comps+=" "$(__sources)
             COMPREPLY=($(compgen -W '${comps[*]}' -- "$cur"))
             ;;
     esac
 }
-complete -F _pacat pacat paplay parecord
+complete -F _pacat pacat paplay parec parecord
 
 _pulseaudio()
 {

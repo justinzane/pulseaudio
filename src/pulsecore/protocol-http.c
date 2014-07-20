@@ -162,17 +162,13 @@ static int do_write(struct connection *c) {
     pa_memblock_unref(chunk.memblock);
 
     if (r < 0) {
-
-        if (errno == EINTR || errno == EAGAIN)
-            return 0;
-
         pa_log("write(): %s", pa_cstrerror(errno));
         return -1;
     }
 
     pa_memblockq_drop(c->output_memblockq, (size_t) r);
 
-    return 0;
+    return 1;
 }
 
 /* Called from main context */
@@ -182,9 +178,13 @@ static void do_work(struct connection *c) {
     if (pa_iochannel_is_hungup(c->io))
         goto fail;
 
-    if (pa_iochannel_is_writable(c->io))
-        if (do_write(c) < 0)
+    while (pa_iochannel_is_writable(c->io)) {
+        int r = do_write(c);
+        if (r < 0)
             goto fail;
+        if (r == 0)
+            break;
+    }
 
     return;
 
@@ -561,7 +561,7 @@ static void handle_listen_prefix(struct connection *c, const char *source_name) 
     data.driver = __FILE__;
     data.module = c->module;
     data.client = c->client;
-    pa_source_output_new_data_set_source(&data, source, FALSE);
+    pa_source_output_new_data_set_source(&data, source, false);
     pa_proplist_update(data.proplist, PA_UPDATE_MERGE, c->client->proplist);
     pa_source_output_new_data_set_sample_spec(&data, &ss);
     pa_source_output_new_data_set_channel_map(&data, &cm);
@@ -600,7 +600,7 @@ static void handle_listen_prefix(struct connection *c, const char *source_name) 
     http_response(c, 200, "OK", t);
     pa_xfree(t);
 
-    if(c->method == METHOD_HEAD) {
+    if (c->method == METHOD_HEAD) {
         connection_unlink(c);
         return;
     }

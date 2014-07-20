@@ -197,7 +197,7 @@ typedef enum pa_stream_flags {
      * return always monotonically increasing time values on each
      * call. This may confuse applications which cannot deal with time
      * going 'backwards', but has the advantage that bad transport
-     * latency estimations that caused the time to to jump ahead can
+     * latency estimations that caused the time to jump ahead can
      * be corrected quickly, without the need to wait. (Please note
      * that this flag was named PA_STREAM_NOT_MONOTONOUS in releases
      * prior to 0.9.11. The old name is still defined too, for
@@ -232,20 +232,50 @@ typedef enum pa_stream_flags {
      * specified manual buffer metrics it is recommended to update
      * them with pa_stream_set_buffer_attr() to compensate for the
      * changed frame sizes. Only supported when the server is at least
-     * PA 0.9.8. It is ignored on older servers. \since 0.9.8 */
+     * PA 0.9.8. It is ignored on older servers.
+     *
+     * When creating streams with pa_stream_new_extended(), this flag has no
+     * effect. If you specify a format with PCM encoding, and you want the
+     * server to choose the sample format, then you should leave the sample
+     * format unspecified in the pa_format_info object. This also means that
+     * you can't use pa_format_info_from_sample_spec(), because that function
+     * always sets the sample format.
+     *
+     * \since 0.9.8 */
 
     PA_STREAM_FIX_RATE = 0x0080U,
     /**< Use the sample rate of the sink, and possibly ignore the rate
      * the sample spec contains. Usage similar to
-     * PA_STREAM_FIX_FORMAT.Only supported when the server is at least
-     * PA 0.9.8. It is ignored on older servers. \since 0.9.8 */
+     * PA_STREAM_FIX_FORMAT. Only supported when the server is at least
+     * PA 0.9.8. It is ignored on older servers.
+     *
+     * When creating streams with pa_stream_new_extended(), this flag has no
+     * effect. If you specify a format with PCM encoding, and you want the
+     * server to choose the sample rate, then you should leave the rate
+     * unspecified in the pa_format_info object. This also means that you can't
+     * use pa_format_info_from_sample_spec(), because that function always sets
+     * the sample rate.
+     *
+     * \since 0.9.8 */
 
     PA_STREAM_FIX_CHANNELS = 0x0100,
     /**< Use the number of channels and the channel map of the sink,
      * and possibly ignore the number of channels and the map the
      * sample spec and the passed channel map contains. Usage similar
      * to PA_STREAM_FIX_FORMAT. Only supported when the server is at
-     * least PA 0.9.8. It is ignored on older servers. \since 0.9.8 */
+     * least PA 0.9.8. It is ignored on older servers.
+     *
+     * When creating streams with pa_stream_new_extended(), this flag has no
+     * effect. If you specify a format with PCM encoding, and you want the
+     * server to choose the channel count and/or channel map, then you should
+     * leave the channels and/or the channel map unspecified in the
+     * pa_format_info object. This also means that you can't use
+     * pa_format_info_from_sample_spec(), because that function always sets
+     * the channel count (but if you only want to leave the channel map
+     * unspecified, then pa_format_info_from_sample_spec() works, because it
+     * accepts a NULL channel map).
+     *
+     * \since 0.9.8 */
 
     PA_STREAM_DONT_MOVE = 0x0200U,
     /**< Don't allow moving of this stream to another
@@ -296,7 +326,7 @@ typedef enum pa_stream_flags {
      * PA_STREAM_ADJUST_LATENCY. \since 0.9.12 */
 
     PA_STREAM_DONT_INHIBIT_AUTO_SUSPEND = 0x8000U,
-    /**< If set this stream won't be taken into account when we it is
+    /**< If set this stream won't be taken into account when it is
      * checked whether the device this stream is connected to should
      * auto-suspend. \since 0.9.15 */
 

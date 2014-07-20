@@ -64,23 +64,25 @@
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("Receive data from a network via RTP/SAP/SDP");
 PA_MODULE_VERSION(PACKAGE_VERSION);
-PA_MODULE_LOAD_ONCE(FALSE);
+PA_MODULE_LOAD_ONCE(false);
 PA_MODULE_USAGE(
         "sink=<name of the sink> "
         "sap_address=<multicast address to listen on> "
+        "latency_msec=<latency in ms> "
 );
 
 #define SAP_PORT 9875
 #define DEFAULT_SAP_ADDRESS "224.0.0.56"
+#define DEFAULT_LATENCY_MSEC 500
 #define MEMBLOCKQ_MAXLENGTH (1024*1024*40)
 #define MAX_SESSIONS 16
 #define DEATH_TIMEOUT 20
 #define RATE_UPDATE_INTERVAL (5*PA_USEC_PER_SEC)
-#define LATENCY_USEC (500*PA_USEC_PER_MSEC)
 
 static const char* const valid_modargs[] = {
     "sink",
     "sap_address",
+    "latency_msec",
     NULL
 };
 
@@ -91,7 +93,7 @@ struct session {
     pa_sink_input *sink_input;
     pa_memblockq *memblockq;
 
-    pa_bool_t first_packet;
+    bool first_packet;
     uint32_t ssrc;
     uint32_t offset;
 
@@ -126,6 +128,8 @@ struct userdata {
     PA_LLIST_HEAD(struct session, sessions);
     pa_hashmap *by_origin;
     int n_sessions;
+
+    pa_usec_t latency;
 };
 
 static void session_free(struct session *s);
@@ -186,12 +190,11 @@ static void sink_input_kill(pa_sink_input* i) {
     pa_sink_input_assert_ref(i);
     pa_assert_se(s = i->userdata);
 
-    pa_hashmap_remove(s->userdata->by_origin, s->sdp_info.origin);
-    session_free(s);
+    pa_hashmap_remove_and_free(s->userdata->by_origin, s->sdp_info.origin);
 }
 
 /* Called from IO context */
-static void sink_input_suspend_within_thread(pa_sink_input* i, pa_bool_t b) {
+static void sink_input_suspend_within_thread(pa_sink_input* i, bool b) {
     struct session *s;
     pa_sink_input_assert_ref(i);
     pa_assert_se(s = i->userdata);
@@ -199,7 +202,7 @@ static void sink_input_suspend_within_thread(pa_sink_input* i, pa_bool_t b) {
     if (b)
         pa_memblockq_flush_read(s->memblockq);
     else
-        s->first_packet = FALSE;
+        s->first_packet = false;
 }
 
 /* Called from I/O thread context */
@@ -234,7 +237,7 @@ static int rtpoll_work_cb(pa_rtpoll_item *i) {
     }
 
     if (!s->first_packet) {
-        s->first_packet = TRUE;
+        s->first_packet = true;
 
         s->ssrc = s->rtp_context.ssrc;
         s->offset = s->rtp_context.timestamp;
@@ -257,7 +260,7 @@ static int rtpoll_work_cb(pa_rtpoll_item *i) {
     else
         delta = j;
 
-    pa_memblockq_seek(s->memblockq, delta * (int64_t) s->rtp_context.frame_size, PA_SEEK_RELATIVE, TRUE);
+    pa_memblockq_seek(s->memblockq, delta * (int64_t) s->rtp_context.frame_size, PA_SEEK_RELATIVE, true);
 
     if (now.tv_sec == 0) {
         PA_ONCE_BEGIN {
@@ -269,7 +272,7 @@ static int rtpoll_work_cb(pa_rtpoll_item *i) {
 
     if (pa_memblockq_push(s->memblockq, &chunk) < 0) {
         pa_log_warn("Queue overrun");
-        pa_memblockq_seek(s->memblockq, (int64_t) chunk.length, PA_SEEK_RELATIVE, TRUE);
+        pa_memblockq_seek(s->memblockq, (int64_t) chunk.length, PA_SEEK_RELATIVE, true);
     }
 
 /*     pa_log("blocks in q: %u", pa_memblockq_get_nblocks(s->memblockq)); */
@@ -378,7 +381,7 @@ static int rtpoll_work_cb(pa_rtpoll_item *i) {
         pa_log_debug("Requesting rewind due to end of underrun");
         pa_sink_input_request_rewind(s->sink_input,
                                      (size_t) (s->sink_input->thread_info.underrun_for == (uint64_t) -1 ? 0 : s->sink_input->thread_info.underrun_for),
-                                     FALSE, TRUE, FALSE);
+                                     false, true, false);
     }
 
     return 1;
@@ -446,17 +449,26 @@ static int mcast_socket(const struct sockaddr* sa, socklen_t salen) {
         goto fail;
     }
 
+    r = 0;
     if (af == AF_INET) {
-        struct ip_mreq mr4;
-        memset(&mr4, 0, sizeof(mr4));
-        mr4.imr_multiaddr = ((const struct sockaddr_in*) sa)->sin_addr;
-        r = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mr4, sizeof(mr4));
+        /* IPv4 multicast addresses are in the 224.0.0.0-239.255.255.255 range */
+        static const uint32_t ipv4_mcast_mask = 0xe0000000;
+
+        if ((ntohl(((const struct sockaddr_in*) sa)->sin_addr.s_addr) & ipv4_mcast_mask) == ipv4_mcast_mask) {
+            struct ip_mreq mr4;
+            memset(&mr4, 0, sizeof(mr4));
+            mr4.imr_multiaddr = ((const struct sockaddr_in*) sa)->sin_addr;
+            r = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mr4, sizeof(mr4));
+        }
 #ifdef HAVE_IPV6
     } else if (af == AF_INET6) {
-        struct ipv6_mreq mr6;
-        memset(&mr6, 0, sizeof(mr6));
-        mr6.ipv6mr_multiaddr = ((const struct sockaddr_in6*) sa)->sin6_addr;
-        r = setsockopt(fd, IPPROTO_IPV6, IPV6_JOIN_GROUP, &mr6, sizeof(mr6));
+        /* IPv6 multicast addresses have 255 as the most significant byte */
+        if (((const struct sockaddr_in6*) sa)->sin6_addr.s6_addr[0] == 0xff) {
+            struct ipv6_mreq mr6;
+            memset(&mr6, 0, sizeof(mr6));
+            mr6.ipv6mr_multiaddr = ((const struct sockaddr_in6*) sa)->sin6_addr;
+            r = setsockopt(fd, IPPROTO_IPV6, IPV6_JOIN_GROUP, &mr6, sizeof(mr6));
+        }
 #endif
     } else
         pa_assert_not_reached();
@@ -505,12 +517,12 @@ static struct session *session_new(struct userdata *u, const pa_sdp_info *sdp_in
 
     s = pa_xnew0(struct session, 1);
     s->userdata = u;
-    s->first_packet = FALSE;
+    s->first_packet = false;
     s->sdp_info = *sdp_info;
     s->rtpoll_item = NULL;
-    s->intended_latency = LATENCY_USEC;
+    s->intended_latency = u->latency;
     s->last_rate_update = pa_timeval_load(&now);
-    s->last_latency = LATENCY_USEC;
+    s->last_latency = u->latency;
     s->estimated_rate = (double) sink->sample_spec.rate;
     s->avg_estimated_rate = (double) sink->sample_spec.rate;
     pa_atomic_store(&s->timestamp, (int) now.tv_sec);
@@ -519,7 +531,7 @@ static struct session *session_new(struct userdata *u, const pa_sdp_info *sdp_in
         goto fail;
 
     pa_sink_input_new_data_init(&data);
-    pa_sink_input_new_data_set_sink(&data, sink, FALSE);
+    pa_sink_input_new_data_set_sink(&data, sink, false);
     data.driver = __FILE__;
     pa_proplist_sets(data.proplist, PA_PROP_MEDIA_ROLE, "stream");
     pa_proplist_setf(data.proplist, PA_PROP_MEDIA_NAME,
@@ -617,7 +629,7 @@ static void session_free(struct session *s) {
 
 static void sap_event_cb(pa_mainloop_api *m, pa_io_event *e, int fd, pa_io_event_flags_t flags, void *userdata) {
     struct userdata *u = userdata;
-    pa_bool_t goodbye = FALSE;
+    bool goodbye = false;
     pa_sdp_info info;
     struct session *s;
 
@@ -634,10 +646,7 @@ static void sap_event_cb(pa_mainloop_api *m, pa_io_event *e, int fd, pa_io_event
         return;
 
     if (goodbye) {
-
-        if ((s = pa_hashmap_remove(u->by_origin, info.origin)))
-            session_free(s);
-
+        pa_hashmap_remove_and_free(u->by_origin, info.origin);
         pa_sdp_info_destroy(&info);
     } else {
 
@@ -674,10 +683,8 @@ static void check_death_event_cb(pa_mainloop_api *m, pa_time_event *t, const str
 
         k = pa_atomic_load(&s->timestamp);
 
-        if (k + DEATH_TIMEOUT < now.tv_sec) {
-            pa_hashmap_remove(u->by_origin, s->sdp_info.origin);
-            session_free(s);
-        }
+        if (k + DEATH_TIMEOUT < now.tv_sec)
+            pa_hashmap_remove_and_free(u->by_origin, s->sdp_info.origin);
     }
 
     /* Restart timer */
@@ -694,6 +701,7 @@ int pa__init(pa_module*m) {
     struct sockaddr *sa;
     socklen_t salen;
     const char *sap_address;
+    uint32_t latency_msec;
     int fd = -1;
 
     pa_assert(m);
@@ -722,6 +730,12 @@ int pa__init(pa_module*m) {
         goto fail;
     }
 
+    latency_msec = DEFAULT_LATENCY_MSEC;
+    if (pa_modargs_get_value_u32(ma, "latency_msec", &latency_msec) < 0 || latency_msec < 1 || latency_msec > 300000) {
+        pa_log("Invalid latency specification");
+        goto fail;
+    }
+
     if ((fd = mcast_socket(sa, salen)) < 0)
         goto fail;
 
@@ -729,13 +743,14 @@ int pa__init(pa_module*m) {
     u->module = m;
     u->core = m->core;
     u->sink_name = pa_xstrdup(pa_modargs_get_value(ma, "sink", NULL));
+    u->latency = (pa_usec_t) latency_msec * PA_USEC_PER_MSEC;
 
     u->sap_event = m->core->mainloop->io_new(m->core->mainloop, fd, PA_IO_EVENT_INPUT, sap_event_cb, u);
     pa_sap_context_init_recv(&u->sap_context, fd);
 
     PA_LLIST_HEAD_INIT(struct session, u->sessions);
     u->n_sessions = 0;
-    u->by_origin = pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func);
+    u->by_origin = pa_hashmap_new_full(pa_idxset_string_hash_func, pa_idxset_string_compare_func, NULL, (pa_free_cb_t) session_free);
 
     u->check_death_event = pa_core_rttime_new(m->core, pa_rtclock_now() + DEATH_TIMEOUT * PA_USEC_PER_SEC, check_death_event_cb, u);
 
@@ -770,7 +785,7 @@ void pa__done(pa_module*m) {
     pa_sap_context_destroy(&u->sap_context);
 
     if (u->by_origin)
-        pa_hashmap_free(u->by_origin, (pa_free_cb_t) session_free);
+        pa_hashmap_free(u->by_origin);
 
     pa_xfree(u->sink_name);
     pa_xfree(u);

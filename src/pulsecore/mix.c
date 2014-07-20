@@ -616,7 +616,7 @@ size_t pa_mix(
         size_t length,
         const pa_sample_spec *spec,
         const pa_cvolume *volume,
-        pa_bool_t mute) {
+        bool mute) {
 
     pa_cvolume full_volume;
     unsigned k;
@@ -650,15 +650,13 @@ size_t pa_mix(
 }
 
 pa_do_mix_func_t pa_get_mix_func(pa_sample_format_t f) {
-    pa_assert(f >= 0);
-    pa_assert(f < PA_SAMPLE_MAX);
+    pa_assert(pa_sample_format_valid(f));
 
     return do_mix_table[f];
 }
 
 void pa_set_mix_func(pa_sample_format_t f, pa_do_mix_func_t func) {
-    pa_assert(f >= 0);
-    pa_assert(f < PA_SAMPLE_MAX);
+    pa_assert(pa_sample_format_valid(f));
 
     do_mix_table[f] = func;
 }

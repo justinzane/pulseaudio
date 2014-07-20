@@ -35,6 +35,7 @@
 
 #include <pulse/xmalloc.h>
 #include <pulse/util.h>
+#include <pulse/thread-mainloop.h>
 
 #include <pulsecore/parseaddr.h>
 #include <pulsecore/sink.h>
@@ -52,7 +53,7 @@
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("mDNS/DNS-SD Service Publisher");
 PA_MODULE_VERSION(PACKAGE_VERSION);
-PA_MODULE_LOAD_ONCE(TRUE);
+PA_MODULE_LOAD_ONCE(true);
 
 #define SERVICE_TYPE_SINK "_pulse-sink._tcp"
 #define SERVICE_TYPE_SOURCE "_pulse-source._tcp"
@@ -64,8 +65,37 @@ PA_MODULE_LOAD_ONCE(TRUE);
 #define SERVICE_SUBTYPE_SOURCE_MONITOR "_monitor._sub."SERVICE_TYPE_SOURCE
 #define SERVICE_SUBTYPE_SOURCE_NON_MONITOR "_non-monitor._sub."SERVICE_TYPE_SOURCE
 
+/*
+ * Note: Because the core avahi-client calls result in synchronous D-Bus
+ * communication, calling any of those functions in the PA mainloop context
+ * could lead to the mainloop being blocked for long periods.
+ *
+ * To avoid this, we create a threaded-mainloop for Avahi calls, and push all
+ * D-Bus communication into that thread. The thumb-rule for the split is:
+ *
+ * 1. If access to PA data structures is needed, use the PA mainloop context
+ *
+ * 2. If a (blocking) avahi-client call is needed, use the Avahi mainloop
+ *
+ * We do have message queue to pass messages from the Avahi mainloop to the PA
+ * mainloop.
+ */
+
 static const char* const valid_modargs[] = {
     NULL
+};
+
+struct avahi_msg {
+    pa_msgobject parent;
+};
+
+typedef struct avahi_msg avahi_msg;
+PA_DEFINE_PRIVATE_CLASS(avahi_msg, pa_msgobject);
+
+enum {
+    AVAHI_MESSAGE_PUBLISH_ALL,
+    AVAHI_MESSAGE_SHUTDOWN_START,
+    AVAHI_MESSAGE_SHUTDOWN_COMPLETE,
 };
 
 enum service_subtype {
@@ -75,21 +105,35 @@ enum service_subtype {
 };
 
 struct service {
+    void *key;
+
     struct userdata *userdata;
     AvahiEntryGroup *entry_group;
     char *service_name;
-    pa_object *device;
+    const char *service_type;
     enum service_subtype subtype;
+
+    char *name;
+    bool is_sink;
+    pa_sample_spec ss;
+    pa_channel_map cm;
+    pa_proplist *proplist;
 };
 
 struct userdata {
+    pa_thread_mq thread_mq;
+    pa_rtpoll *rtpoll;
+    avahi_msg *msg;
+
     pa_core *core;
     pa_module *module;
+    pa_mainloop_api *api;
+    pa_threaded_mainloop *mainloop;
 
     AvahiPoll *avahi_poll;
     AvahiClient *client;
 
-    pa_hashmap *services;
+    pa_hashmap *services; /* protect with mainloop lock */
     char *service_name;
 
     AvahiEntryGroup *main_entry_group;
@@ -97,36 +141,43 @@ struct userdata {
     pa_hook_slot *sink_new_slot, *source_new_slot, *sink_unlink_slot, *source_unlink_slot, *sink_changed_slot, *source_changed_slot;
 
     pa_native_protocol *native;
+
+    bool shutting_down; /* Used in the main thread. */
+    bool client_freed; /* Used in the Avahi thread. */
 };
 
-static void get_service_data(struct service *s, pa_sample_spec *ret_ss, pa_channel_map *ret_map, const char **ret_name, pa_proplist **ret_proplist, enum service_subtype *ret_subtype) {
+/* Runs in PA mainloop context */
+static void get_service_data(struct service *s, pa_object *device) {
     pa_assert(s);
-    pa_assert(ret_ss);
-    pa_assert(ret_proplist);
-    pa_assert(ret_subtype);
 
-    if (pa_sink_isinstance(s->device)) {
-        pa_sink *sink = PA_SINK(s->device);
+    if (pa_sink_isinstance(device)) {
+        pa_sink *sink = PA_SINK(device);
 
-        *ret_ss = sink->sample_spec;
-        *ret_map = sink->channel_map;
-        *ret_name = sink->name;
-        *ret_proplist = sink->proplist;
-        *ret_subtype = sink->flags & PA_SINK_HARDWARE ? SUBTYPE_HARDWARE : SUBTYPE_VIRTUAL;
+        s->is_sink = true;
+        s->service_type = SERVICE_TYPE_SINK;
+        s->ss = sink->sample_spec;
+        s->cm = sink->channel_map;
+        s->name = pa_xstrdup(sink->name);
+        s->proplist = pa_proplist_copy(sink->proplist);
+        s->subtype = sink->flags & PA_SINK_HARDWARE ? SUBTYPE_HARDWARE : SUBTYPE_VIRTUAL;
 
-    } else if (pa_source_isinstance(s->device)) {
-        pa_source *source = PA_SOURCE(s->device);
+    } else if (pa_source_isinstance(device)) {
+        pa_source *source = PA_SOURCE(device);
 
-        *ret_ss = source->sample_spec;
-        *ret_map = source->channel_map;
-        *ret_name = source->name;
-        *ret_proplist = source->proplist;
-        *ret_subtype = source->monitor_of ? SUBTYPE_MONITOR : (source->flags & PA_SOURCE_HARDWARE ? SUBTYPE_HARDWARE : SUBTYPE_VIRTUAL);
+        s->is_sink = false;
+        s->service_type = SERVICE_TYPE_SOURCE;
+        s->ss = source->sample_spec;
+        s->cm = source->channel_map;
+        s->name = pa_xstrdup(source->name);
+        s->proplist = pa_proplist_copy(source->proplist);
+        s->subtype = source->monitor_of ? SUBTYPE_MONITOR : (source->flags & PA_SOURCE_HARDWARE ? SUBTYPE_HARDWARE : SUBTYPE_VIRTUAL);
 
     } else
         pa_assert_not_reached();
 }
 
+/* Can be used in either PA or Avahi mainloop context since the bits of u->core
+ * that we access don't change after startup. */
 static AvahiStringList* txt_record_server_data(pa_core *c, AvahiStringList *l) {
     char s[128];
     char *t;
@@ -153,8 +204,9 @@ static AvahiStringList* txt_record_server_data(pa_core *c, AvahiStringList *l) {
     return l;
 }
 
-static int publish_service(struct service *s);
+static void publish_service(pa_mainloop_api *api, void *service);
 
+/* Runs in Avahi mainloop context */
 static void service_entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupState state, void *userdata) {
     struct service *s = userdata;
 
@@ -174,7 +226,7 @@ static void service_entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupStat
             pa_xfree(s->service_name);
             s->service_name = t;
 
-            publish_service(s);
+            publish_service(NULL, s);
             break;
         }
 
@@ -195,6 +247,7 @@ static void service_entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupStat
 
 static void service_free(struct service *s);
 
+/* Can run in either context */
 static uint16_t compute_port(struct userdata *u) {
     pa_strlist *i;
 
@@ -219,15 +272,13 @@ static uint16_t compute_port(struct userdata *u) {
     return PA_NATIVE_DEFAULT_PORT;
 }
 
-static int publish_service(struct service *s) {
+/* Runs in Avahi mainloop context */
+static void publish_service(pa_mainloop_api *api PA_GCC_UNUSED, void *service) {
+    struct service *s = (struct service *) service;
     int r = -1;
     AvahiStringList *txt = NULL;
-    const char *name = NULL, *t;
-    pa_proplist *proplist = NULL;
-    pa_sample_spec ss;
-    pa_channel_map map;
     char cm[PA_CHANNEL_MAP_SNPRINT_MAX];
-    enum service_subtype subtype;
+    const char *t;
 
     const char * const subtype_text[] = {
         [SUBTYPE_HARDWARE] = "hardware",
@@ -238,7 +289,7 @@ static int publish_service(struct service *s) {
     pa_assert(s);
 
     if (!s->userdata->client || avahi_client_get_state(s->userdata->client) != AVAHI_CLIENT_S_RUNNING)
-        return 0;
+        return;
 
     if (!s->entry_group) {
         if (!(s->entry_group = avahi_entry_group_new(s->userdata->client, service_entry_group_callback, s))) {
@@ -250,25 +301,24 @@ static int publish_service(struct service *s) {
 
     txt = txt_record_server_data(s->userdata->core, txt);
 
-    get_service_data(s, &ss, &map, &name, &proplist, &subtype);
-    txt = avahi_string_list_add_pair(txt, "device", name);
-    txt = avahi_string_list_add_printf(txt, "rate=%u", ss.rate);
-    txt = avahi_string_list_add_printf(txt, "channels=%u", ss.channels);
-    txt = avahi_string_list_add_pair(txt, "format", pa_sample_format_to_string(ss.format));
-    txt = avahi_string_list_add_pair(txt, "channel_map", pa_channel_map_snprint(cm, sizeof(cm), &map));
-    txt = avahi_string_list_add_pair(txt, "subtype", subtype_text[subtype]);
+    txt = avahi_string_list_add_pair(txt, "device", s->name);
+    txt = avahi_string_list_add_printf(txt, "rate=%u", s->ss.rate);
+    txt = avahi_string_list_add_printf(txt, "channels=%u", s->ss.channels);
+    txt = avahi_string_list_add_pair(txt, "format", pa_sample_format_to_string(s->ss.format));
+    txt = avahi_string_list_add_pair(txt, "channel_map", pa_channel_map_snprint(cm, sizeof(cm), &s->cm));
+    txt = avahi_string_list_add_pair(txt, "subtype", subtype_text[s->subtype]);
 
-    if ((t = pa_proplist_gets(proplist, PA_PROP_DEVICE_DESCRIPTION)))
+    if ((t = pa_proplist_gets(s->proplist, PA_PROP_DEVICE_DESCRIPTION)))
         txt = avahi_string_list_add_pair(txt, "description", t);
-    if ((t = pa_proplist_gets(proplist, PA_PROP_DEVICE_ICON_NAME)))
+    if ((t = pa_proplist_gets(s->proplist, PA_PROP_DEVICE_ICON_NAME)))
         txt = avahi_string_list_add_pair(txt, "icon-name", t);
-    if ((t = pa_proplist_gets(proplist, PA_PROP_DEVICE_VENDOR_NAME)))
+    if ((t = pa_proplist_gets(s->proplist, PA_PROP_DEVICE_VENDOR_NAME)))
         txt = avahi_string_list_add_pair(txt, "vendor-name", t);
-    if ((t = pa_proplist_gets(proplist, PA_PROP_DEVICE_PRODUCT_NAME)))
+    if ((t = pa_proplist_gets(s->proplist, PA_PROP_DEVICE_PRODUCT_NAME)))
         txt = avahi_string_list_add_pair(txt, "product-name", t);
-    if ((t = pa_proplist_gets(proplist, PA_PROP_DEVICE_CLASS)))
+    if ((t = pa_proplist_gets(s->proplist, PA_PROP_DEVICE_CLASS)))
         txt = avahi_string_list_add_pair(txt, "class", t);
-    if ((t = pa_proplist_gets(proplist, PA_PROP_DEVICE_FORM_FACTOR)))
+    if ((t = pa_proplist_gets(s->proplist, PA_PROP_DEVICE_FORM_FACTOR)))
         txt = avahi_string_list_add_pair(txt, "form-factor", t);
 
     if (avahi_entry_group_add_service_strlst(
@@ -276,7 +326,7 @@ static int publish_service(struct service *s) {
                 AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC,
                 0,
                 s->service_name,
-                pa_sink_isinstance(s->device) ? SERVICE_TYPE_SINK : SERVICE_TYPE_SOURCE,
+                s->service_type,
                 NULL,
                 NULL,
                 compute_port(s->userdata),
@@ -291,16 +341,16 @@ static int publish_service(struct service *s) {
                 AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC,
                 0,
                 s->service_name,
-                pa_sink_isinstance(s->device) ? SERVICE_TYPE_SINK : SERVICE_TYPE_SOURCE,
+                s->service_type,
                 NULL,
-                pa_sink_isinstance(s->device) ? (subtype == SUBTYPE_HARDWARE ? SERVICE_SUBTYPE_SINK_HARDWARE : SERVICE_SUBTYPE_SINK_VIRTUAL) :
-                (subtype == SUBTYPE_HARDWARE ? SERVICE_SUBTYPE_SOURCE_HARDWARE : (subtype == SUBTYPE_VIRTUAL ? SERVICE_SUBTYPE_SOURCE_VIRTUAL : SERVICE_SUBTYPE_SOURCE_MONITOR))) < 0) {
+                s->is_sink ? (s->subtype == SUBTYPE_HARDWARE ? SERVICE_SUBTYPE_SINK_HARDWARE : SERVICE_SUBTYPE_SINK_VIRTUAL) :
+                (s->subtype == SUBTYPE_HARDWARE ? SERVICE_SUBTYPE_SOURCE_HARDWARE : (s->subtype == SUBTYPE_VIRTUAL ? SERVICE_SUBTYPE_SOURCE_VIRTUAL : SERVICE_SUBTYPE_SOURCE_MONITOR))) < 0) {
 
         pa_log("avahi_entry_group_add_service_subtype(): %s", avahi_strerror(avahi_client_errno(s->userdata->client)));
         goto finish;
     }
 
-    if (pa_source_isinstance(s->device) && subtype != SUBTYPE_MONITOR) {
+    if (!s->is_sink && s->subtype != SUBTYPE_MONITOR) {
         if (avahi_entry_group_add_service_subtype(
                     s->entry_group,
                     AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC,
@@ -326,16 +376,13 @@ static int publish_service(struct service *s) {
 finish:
 
     /* Remove this service */
-    if (r < 0) {
-        pa_hashmap_remove(s->userdata->services, s->device);
-        service_free(s);
-    }
+    if (r < 0)
+        pa_hashmap_remove_and_free(s->userdata->services, s->key);
 
     avahi_string_list_free(txt);
-
-    return r;
 }
 
+/* Runs in PA mainloop context */
 static struct service *get_service(struct userdata *u, pa_object *device) {
     struct service *s;
     char *hn, *un;
@@ -344,21 +391,20 @@ static struct service *get_service(struct userdata *u, pa_object *device) {
     pa_assert(u);
     pa_object_assert_ref(device);
 
+    pa_threaded_mainloop_lock(u->mainloop);
+
     if ((s = pa_hashmap_get(u->services, device)))
-        return s;
+        goto out;
 
     s = pa_xnew(struct service, 1);
+    s->key = device;
     s->userdata = u;
     s->entry_group = NULL;
-    s->device = device;
 
-    if (pa_sink_isinstance(device)) {
-        if (!(n = pa_proplist_gets(PA_SINK(device)->proplist, PA_PROP_DEVICE_DESCRIPTION)))
-            n = PA_SINK(device)->name;
-    } else {
-        if (!(n = pa_proplist_gets(PA_SOURCE(device)->proplist, PA_PROP_DEVICE_DESCRIPTION)))
-            n = PA_SOURCE(device)->name;
-    }
+    get_service_data(s, device);
+
+    if (!(n = pa_proplist_gets(s->proplist, PA_PROP_DEVICE_DESCRIPTION)))
+        n = s->name;
 
     hn = pa_get_host_name_malloc();
     un = pa_get_user_name_malloc();
@@ -368,11 +414,15 @@ static struct service *get_service(struct userdata *u, pa_object *device) {
     pa_xfree(un);
     pa_xfree(hn);
 
-    pa_hashmap_put(u->services, s->device, s);
+    pa_hashmap_put(u->services, device, s);
+
+out:
+    pa_threaded_mainloop_unlock(u->mainloop);
 
     return s;
 }
 
+/* Run from Avahi mainloop context */
 static void service_free(struct service *s) {
     pa_assert(s);
 
@@ -382,10 +432,15 @@ static void service_free(struct service *s) {
     }
 
     pa_xfree(s->service_name);
+
+    pa_xfree(s->name);
+    pa_proplist_free(s->proplist);
+
     pa_xfree(s);
 }
 
-static pa_bool_t shall_ignore(pa_object *o) {
+/* Runs in PA mainloop context */
+static bool shall_ignore(pa_object *o) {
     pa_object_assert_ref(o);
 
     if (pa_sink_isinstance(o))
@@ -397,30 +452,35 @@ static pa_bool_t shall_ignore(pa_object *o) {
     pa_assert_not_reached();
 }
 
+/* Runs in PA mainloop context */
 static pa_hook_result_t device_new_or_changed_cb(pa_core *c, pa_object *o, struct userdata *u) {
     pa_assert(c);
     pa_object_assert_ref(o);
 
-    if (!shall_ignore(o))
-        publish_service(get_service(u, o));
+    if (!shall_ignore(o)) {
+        pa_threaded_mainloop_lock(u->mainloop);
+        pa_mainloop_api_once(u->api, publish_service, get_service(u, o));
+        pa_threaded_mainloop_unlock(u->mainloop);
+    }
 
     return PA_HOOK_OK;
 }
 
+/* Runs in PA mainloop context */
 static pa_hook_result_t device_unlink_cb(pa_core *c, pa_object *o, struct userdata *u) {
-    struct service *s;
-
     pa_assert(c);
     pa_object_assert_ref(o);
 
-    if ((s = pa_hashmap_remove(u->services, o)))
-        service_free(s);
+    pa_threaded_mainloop_lock(u->mainloop);
+    pa_hashmap_remove_and_free(u->services, o);
+    pa_threaded_mainloop_unlock(u->mainloop);
 
     return PA_HOOK_OK;
 }
 
 static int publish_main_service(struct userdata *u);
 
+/* Runs in Avahi mainloop context */
 static void main_entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupState state, void *userdata) {
     struct userdata *u = userdata;
     pa_assert(u);
@@ -457,6 +517,7 @@ static void main_entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupState s
     }
 }
 
+/* Runs in Avahi mainloop context */
 static int publish_main_service(struct userdata *u) {
     AvahiStringList *txt = NULL;
     int r = -1;
@@ -501,6 +562,7 @@ fail:
     return r;
 }
 
+/* Runs in PA mainloop context */
 static int publish_all_services(struct userdata *u) {
     pa_sink *sink;
     pa_source *source;
@@ -512,12 +574,18 @@ static int publish_all_services(struct userdata *u) {
     pa_log_debug("Publishing services in Zeroconf");
 
     for (sink = PA_SINK(pa_idxset_first(u->core->sinks, &idx)); sink; sink = PA_SINK(pa_idxset_next(u->core->sinks, &idx)))
-        if (!shall_ignore(PA_OBJECT(sink)))
-            publish_service(get_service(u, PA_OBJECT(sink)));
+        if (!shall_ignore(PA_OBJECT(sink))) {
+            pa_threaded_mainloop_lock(u->mainloop);
+            pa_mainloop_api_once(u->api, publish_service, get_service(u, PA_OBJECT(sink)));
+            pa_threaded_mainloop_unlock(u->mainloop);
+        }
 
     for (source = PA_SOURCE(pa_idxset_first(u->core->sources, &idx)); source; source = PA_SOURCE(pa_idxset_next(u->core->sources, &idx)))
-        if (!shall_ignore(PA_OBJECT(source)))
-            publish_service(get_service(u, PA_OBJECT(source)));
+        if (!shall_ignore(PA_OBJECT(source))) {
+            pa_threaded_mainloop_lock(u->mainloop);
+            pa_mainloop_api_once(u->api, publish_service, get_service(u, PA_OBJECT(source)));
+            pa_threaded_mainloop_unlock(u->mainloop);
+        }
 
     if (publish_main_service(u) < 0)
         goto fail;
@@ -528,7 +596,8 @@ fail:
     return r;
 }
 
-static void unpublish_all_services(struct userdata *u, pa_bool_t rem) {
+/* Runs in Avahi mainloop context */
+static void unpublish_all_services(struct userdata *u, bool rem) {
     void *state = NULL;
     struct service *s;
 
@@ -561,6 +630,32 @@ static void unpublish_all_services(struct userdata *u, pa_bool_t rem) {
     }
 }
 
+/* Runs in PA mainloop context */
+static int avahi_process_msg(pa_msgobject *o, int code, void *data, int64_t offset, pa_memchunk *chunk) {
+    struct userdata *u = (struct userdata *) data;
+
+    pa_assert(u);
+
+    if (u->shutting_down)
+        return 0;
+
+    switch (code) {
+        case AVAHI_MESSAGE_PUBLISH_ALL:
+            publish_all_services(u);
+            break;
+
+        case AVAHI_MESSAGE_SHUTDOWN_START:
+            pa_module_unload(u->core, u->module, true);
+            break;
+
+        default:
+            pa_assert_not_reached();
+    }
+
+    return 0;
+}
+
+/* Runs in Avahi mainloop context */
 static void client_callback(AvahiClient *c, AvahiClientState state, void *userdata) {
     struct userdata *u = userdata;
 
@@ -571,12 +666,13 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *userda
 
     switch (state) {
         case AVAHI_CLIENT_S_RUNNING:
-            publish_all_services(u);
+            /* Collect all sinks/sources, and publish them */
+            pa_asyncmsgq_post(u->thread_mq.outq, PA_MSGOBJECT(u->msg), AVAHI_MESSAGE_PUBLISH_ALL, u, 0, NULL, NULL);
             break;
 
         case AVAHI_CLIENT_S_COLLISION:
             pa_log_debug("Host name collision");
-            unpublish_all_services(u, FALSE);
+            unpublish_all_services(u, false);
             break;
 
         case AVAHI_CLIENT_FAILURE:
@@ -585,12 +681,12 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *userda
 
                 pa_log_debug("Avahi daemon disconnected.");
 
-                unpublish_all_services(u, TRUE);
+                unpublish_all_services(u, true);
                 avahi_client_free(u->client);
 
                 if (!(u->client = avahi_client_new(u->avahi_poll, AVAHI_CLIENT_NO_FAIL, client_callback, u, &error))) {
                     pa_log("avahi_client_new() failed: %s", avahi_strerror(error));
-                    pa_module_unload_request(u->module, TRUE);
+                    pa_module_unload_request(u->module, true);
                 }
             }
 
@@ -600,26 +696,63 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *userda
     }
 }
 
+/* Runs in Avahi mainloop context */
+static void create_client(pa_mainloop_api *api PA_GCC_UNUSED, void *userdata) {
+    struct userdata *u = (struct userdata *) userdata;
+    int error;
+
+    /* create_client() and client_free() are called via defer events. If the
+     * two defer events are created very quickly one after another, we can't
+     * assume that the defer event that runs create_client() will be dispatched
+     * before the defer event that runs client_free() (at the time of writing,
+     * pa_mainloop actually always dispatches queued defer events in reverse
+     * creation order). For that reason we must be prepared for the case where
+     * client_free() has already been called. */
+    if (u->client_freed)
+        return;
+
+    pa_thread_mq_install(&u->thread_mq);
+
+    if (!(u->client = avahi_client_new(u->avahi_poll, AVAHI_CLIENT_NO_FAIL, client_callback, u, &error))) {
+        pa_log("avahi_client_new() failed: %s", avahi_strerror(error));
+        goto fail;
+    }
+
+    pa_log_debug("Started Avahi threaded mainloop");
+
+    return;
+
+fail:
+    pa_asyncmsgq_post(u->thread_mq.outq, PA_MSGOBJECT(u->msg), AVAHI_MESSAGE_SHUTDOWN_START, u, 0, NULL, NULL);
+}
+
 int pa__init(pa_module*m) {
 
     struct userdata *u;
     pa_modargs *ma = NULL;
     char *hn, *un;
-    int error;
 
     if (!(ma = pa_modargs_new(m->argument, valid_modargs))) {
         pa_log("Failed to parse module arguments.");
         goto fail;
     }
 
-    m->userdata = u = pa_xnew(struct userdata, 1);
+    m->userdata = u = pa_xnew0(struct userdata, 1);
     u->core = m->core;
     u->module = m;
     u->native = pa_native_protocol_get(u->core);
 
-    u->avahi_poll = pa_avahi_poll_new(m->core->mainloop);
+    u->rtpoll = pa_rtpoll_new();
+    u->mainloop = pa_threaded_mainloop_new();
+    u->api = pa_threaded_mainloop_get_api(u->mainloop);
 
-    u->services = pa_hashmap_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
+    pa_thread_mq_init(&u->thread_mq, u->core->mainloop, u->rtpoll);
+    u->msg = pa_msgobject_new(avahi_msg);
+    u->msg->parent.process_msg = avahi_process_msg;
+
+    u->avahi_poll = pa_avahi_poll_new(u->api);
+
+    u->services = pa_hashmap_new_full(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func, NULL, (pa_free_cb_t) service_free);
 
     u->sink_new_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_SINK_PUT], PA_HOOK_LATE, (pa_hook_cb_t) device_new_or_changed_cb, u);
     u->sink_changed_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_SINK_PROPLIST_CHANGED], PA_HOOK_LATE, (pa_hook_cb_t) device_new_or_changed_cb, u);
@@ -628,18 +761,18 @@ int pa__init(pa_module*m) {
     u->source_changed_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_SOURCE_PROPLIST_CHANGED], PA_HOOK_LATE, (pa_hook_cb_t) device_new_or_changed_cb, u);
     u->source_unlink_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_SOURCE_UNLINK], PA_HOOK_LATE, (pa_hook_cb_t) device_unlink_cb, u);
 
-    u->main_entry_group = NULL;
-
     un = pa_get_user_name_malloc();
     hn = pa_get_host_name_malloc();
     u->service_name = pa_truncate_utf8(pa_sprintf_malloc("%s@%s", un, hn), AVAHI_LABEL_MAX-1);
     pa_xfree(un);
     pa_xfree(hn);
 
-    if (!(u->client = avahi_client_new(u->avahi_poll, AVAHI_CLIENT_NO_FAIL, client_callback, u, &error))) {
-        pa_log("avahi_client_new() failed: %s", avahi_strerror(error));
-        goto fail;
-    }
+    pa_threaded_mainloop_set_name(u->mainloop, "avahi-ml");
+    pa_threaded_mainloop_start(u->mainloop);
+
+    pa_threaded_mainloop_lock(u->mainloop);
+    pa_mainloop_api_once(u->api, create_client, u);
+    pa_threaded_mainloop_unlock(u->mainloop);
 
     pa_modargs_free(ma);
 
@@ -654,6 +787,26 @@ fail:
     return -1;
 }
 
+/* Runs in Avahi mainloop context */
+static void client_free(pa_mainloop_api *api PA_GCC_UNUSED, void *userdata) {
+    struct userdata *u = (struct userdata *) userdata;
+
+    pa_hashmap_free(u->services);
+
+    if (u->main_entry_group)
+        avahi_entry_group_free(u->main_entry_group);
+
+    if (u->client)
+        avahi_client_free(u->client);
+
+    if (u->avahi_poll)
+        pa_avahi_poll_free(u->avahi_poll);
+
+    pa_asyncmsgq_post(u->thread_mq.outq, PA_MSGOBJECT(u->msg), AVAHI_MESSAGE_SHUTDOWN_COMPLETE, u, 0, NULL, NULL);
+
+    u->client_freed = true;
+}
+
 void pa__done(pa_module*m) {
     struct userdata*u;
     pa_assert(m);
@@ -661,8 +814,18 @@ void pa__done(pa_module*m) {
     if (!(u = m->userdata))
         return;
 
-    if (u->services)
-        pa_hashmap_free(u->services, (pa_free_cb_t) service_free);
+    u->shutting_down = true;
+
+    pa_threaded_mainloop_lock(u->mainloop);
+    pa_mainloop_api_once(u->api, client_free, u);
+    pa_threaded_mainloop_unlock(u->mainloop);
+    pa_asyncmsgq_wait_for(u->thread_mq.outq, AVAHI_MESSAGE_SHUTDOWN_COMPLETE);
+
+    pa_threaded_mainloop_stop(u->mainloop);
+    pa_threaded_mainloop_free(u->mainloop);
+
+    pa_thread_mq_done(&u->thread_mq);
+    pa_rtpoll_free(u->rtpoll);
 
     if (u->sink_new_slot)
         pa_hook_slot_free(u->sink_new_slot);
@@ -677,18 +840,10 @@ void pa__done(pa_module*m) {
     if (u->source_unlink_slot)
         pa_hook_slot_free(u->source_unlink_slot);
 
-    if (u->main_entry_group)
-        avahi_entry_group_free(u->main_entry_group);
-
-    if (u->client)
-        avahi_client_free(u->client);
-
-    if (u->avahi_poll)
-        pa_avahi_poll_free(u->avahi_poll);
-
     if (u->native)
         pa_native_protocol_unref(u->native);
 
+    pa_xfree(u->msg);
     pa_xfree(u->service_name);
     pa_xfree(u);
 }

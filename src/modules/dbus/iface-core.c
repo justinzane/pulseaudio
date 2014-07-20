@@ -510,7 +510,7 @@ static void handle_set_default_sample_format(DBusConnection *conn, DBusMessage *
 
     dbus_message_iter_get_basic(iter, &default_sample_format);
 
-    if (default_sample_format >= PA_SAMPLE_MAX) {
+    if (!pa_sample_format_valid(default_sample_format)) {
         pa_dbus_send_error(conn, msg, DBUS_ERROR_INVALID_ARGS, "Invalid sample format.");
         return;
     }
@@ -544,8 +544,7 @@ static void handle_set_default_sample_rate(DBusConnection *conn, DBusMessage *ms
 
     dbus_message_iter_get_basic(iter, &default_sample_rate);
 
-    if (default_sample_rate <= 0 || default_sample_rate > PA_RATE_MAX ||
-        !((default_sample_rate % 4000 == 0) || (default_sample_rate % 11025 == 0)))  {
+    if (!pa_sample_rate_valid(default_sample_rate)) {
         pa_dbus_send_error(conn, msg, DBUS_ERROR_INVALID_ARGS, "Invalid sample rate.");
         return;
     }
@@ -579,8 +578,7 @@ static void handle_set_alternate_sample_rate(DBusConnection *conn, DBusMessage *
 
     dbus_message_iter_get_basic(iter, &alternate_sample_rate);
 
-    if (alternate_sample_rate <= 0 || alternate_sample_rate > PA_RATE_MAX ||
-        !((alternate_sample_rate % 4000 == 0) || (alternate_sample_rate % 11025 == 0))) {
+    if (!pa_sample_rate_valid(alternate_sample_rate)) {
         pa_dbus_send_error(conn, msg, DBUS_ERROR_INVALID_ARGS, "Invalid sample rate.");
         return;
     }
@@ -1317,12 +1315,12 @@ static void handle_upload_sample(DBusConnection *conn, DBusMessage *msg, void *u
     dbus_message_iter_recurse(&msg_iter, &array_iter);
     dbus_message_iter_get_fixed_array(&array_iter, &data, &data_length);
 
-    if (sample_format >= PA_SAMPLE_MAX) {
+    if (!pa_sample_format_valid(sample_format)) {
         pa_dbus_send_error(conn, msg, DBUS_ERROR_INVALID_ARGS, "Invalid sample format.");
         goto finish;
     }
 
-    if (sample_rate <= 0 || sample_rate > PA_RATE_MAX) {
+    if (!pa_sample_rate_valid(sample_rate)) {
         pa_dbus_send_error(conn, msg, DBUS_ERROR_INVALID_ARGS, "Invalid sample rate.");
         goto finish;
     }
@@ -1407,9 +1405,9 @@ static void handle_upload_sample(DBusConnection *conn, DBusMessage *msg, void *u
         sample->volume.channels = n_channels;
         for (i = 0; i < n_volume_entries; ++i)
             sample->volume.values[i] = default_volume[i];
-        sample->volume_is_set = TRUE;
+        sample->volume_is_set = true;
     } else {
-        sample->volume_is_set = FALSE;
+        sample->volume_is_set = false;
     }
 
     dbus_sample = pa_dbusiface_sample_new(c, sample);
@@ -1427,17 +1425,17 @@ finish:
         pa_memblock_unref(chunk.memblock);
 }
 
-static pa_bool_t contains_space(const char *string) {
+static bool contains_space(const char *string) {
     const char *p;
 
     pa_assert(string);
 
     for (p = string; *p; ++p) {
         if (isspace(*p))
-            return TRUE;
+            return true;
     }
 
-    return FALSE;
+    return false;
 }
 
 static void handle_load_module(DBusConnection *conn, DBusMessage *msg, void *userdata) {
@@ -1530,7 +1528,7 @@ static void handle_exit(DBusConnection *conn, DBusMessage *msg, void *userdata) 
 
     pa_dbus_send_empty_reply(conn, msg);
 
-    pa_core_exit(c->core, FALSE, 0);
+    pa_core_exit(c->core, false, 0);
 }
 
 static void handle_listen_for_signal(DBusConnection *conn, DBusMessage *msg, void *userdata) {
@@ -1600,8 +1598,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                     object_path = pa_dbusiface_device_get_path(device_iface);
 
                     pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								       PA_DBUS_CORE_INTERFACE,
-								       signals[SIGNAL_FALLBACK_SINK_UPDATED].name)));
+                                                                       PA_DBUS_CORE_INTERFACE,
+                                                                       signals[SIGNAL_FALLBACK_SINK_UPDATED].name)));
                     pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
                     pa_dbus_protocol_send_signal(c->dbus_protocol, signal_msg);
                     dbus_message_unref(signal_msg);
@@ -1627,8 +1625,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                     object_path = pa_dbusiface_device_get_path(device_iface);
 
                     pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								       PA_DBUS_CORE_INTERFACE,
-								       signals[SIGNAL_FALLBACK_SOURCE_UPDATED].name)));
+                                                                       PA_DBUS_CORE_INTERFACE,
+                                                                       signals[SIGNAL_FALLBACK_SOURCE_UPDATED].name)));
                     pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
                     pa_dbus_protocol_send_signal(c->dbus_protocol, signal_msg);
                     dbus_message_unref(signal_msg);
@@ -1660,8 +1658,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                 object_path = pa_dbusiface_card_get_path(card_iface);
 
                 pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								   PA_DBUS_CORE_INTERFACE,
-								   signals[SIGNAL_NEW_CARD].name)));
+                                                                   PA_DBUS_CORE_INTERFACE,
+                                                                   signals[SIGNAL_NEW_CARD].name)));
                 pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
 
             } else if ((t & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_REMOVE) {
@@ -1671,8 +1669,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                 object_path = pa_dbusiface_card_get_path(card_iface);
 
                 pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								   PA_DBUS_CORE_INTERFACE,
-								   signals[SIGNAL_CARD_REMOVED].name)));
+                                                                   PA_DBUS_CORE_INTERFACE,
+                                                                   signals[SIGNAL_CARD_REMOVED].name)));
                 pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
 
                 pa_dbusiface_card_free(card_iface);
@@ -1694,8 +1692,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                 object_path = pa_dbusiface_stream_get_path(stream_iface);
 
                 pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								   PA_DBUS_CORE_INTERFACE,
-								   signals[SIGNAL_NEW_PLAYBACK_STREAM].name)));
+                                                                   PA_DBUS_CORE_INTERFACE,
+                                                                   signals[SIGNAL_NEW_PLAYBACK_STREAM].name)));
                 pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
 
             } else if ((t & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_REMOVE) {
@@ -1705,8 +1703,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                 object_path = pa_dbusiface_stream_get_path(stream_iface);
 
                 pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								   PA_DBUS_CORE_INTERFACE,
-								   signals[SIGNAL_PLAYBACK_STREAM_REMOVED].name)));
+                                                                   PA_DBUS_CORE_INTERFACE,
+                                                                   signals[SIGNAL_PLAYBACK_STREAM_REMOVED].name)));
                 pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
 
                 pa_dbusiface_stream_free(stream_iface);
@@ -1728,8 +1726,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                 object_path = pa_dbusiface_stream_get_path(stream_iface);
 
                 pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								   PA_DBUS_CORE_INTERFACE,
-								   signals[SIGNAL_NEW_RECORD_STREAM].name)));
+                                                                   PA_DBUS_CORE_INTERFACE,
+                                                                   signals[SIGNAL_NEW_RECORD_STREAM].name)));
                 pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
 
             } else if ((t & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_REMOVE) {
@@ -1739,8 +1737,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                 object_path = pa_dbusiface_stream_get_path(stream_iface);
 
                 pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								   PA_DBUS_CORE_INTERFACE,
-								   signals[SIGNAL_RECORD_STREAM_REMOVED].name)));
+                                                                   PA_DBUS_CORE_INTERFACE,
+                                                                   signals[SIGNAL_RECORD_STREAM_REMOVED].name)));
                 pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
 
                 pa_dbusiface_stream_free(stream_iface);
@@ -1762,8 +1760,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                 object_path = pa_dbusiface_sample_get_path(sample_iface);
 
                 pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								   PA_DBUS_CORE_INTERFACE,
-								   signals[SIGNAL_NEW_SAMPLE].name)));
+                                                                   PA_DBUS_CORE_INTERFACE,
+                                                                   signals[SIGNAL_NEW_SAMPLE].name)));
                 pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
 
             } else if ((t & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_REMOVE) {
@@ -1773,8 +1771,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                 object_path = pa_dbusiface_sample_get_path(sample_iface);
 
                 pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								   PA_DBUS_CORE_INTERFACE,
-								   signals[SIGNAL_SAMPLE_REMOVED].name)));
+                                                                   PA_DBUS_CORE_INTERFACE,
+                                                                   signals[SIGNAL_SAMPLE_REMOVED].name)));
                 pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
 
                 pa_dbusiface_sample_free(sample_iface);
@@ -1796,8 +1794,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                 object_path = pa_dbusiface_module_get_path(module_iface);
 
                 pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								   PA_DBUS_CORE_INTERFACE,
-								   signals[SIGNAL_NEW_MODULE].name)));
+                                                                   PA_DBUS_CORE_INTERFACE,
+                                                                   signals[SIGNAL_NEW_MODULE].name)));
                 pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
 
             } else if ((t & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_REMOVE) {
@@ -1807,8 +1805,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                 object_path = pa_dbusiface_module_get_path(module_iface);
 
                 pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								   PA_DBUS_CORE_INTERFACE,
-								   signals[SIGNAL_MODULE_REMOVED].name)));
+                                                                   PA_DBUS_CORE_INTERFACE,
+                                                                   signals[SIGNAL_MODULE_REMOVED].name)));
                 pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
 
                 pa_dbusiface_module_free(module_iface);
@@ -1830,8 +1828,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                 object_path = pa_dbusiface_client_get_path(client_iface);
 
                 pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								   PA_DBUS_CORE_INTERFACE,
-								   signals[SIGNAL_NEW_CLIENT].name)));
+                                                                   PA_DBUS_CORE_INTERFACE,
+                                                                   signals[SIGNAL_NEW_CLIENT].name)));
                 pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
 
             } else if ((t & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_REMOVE) {
@@ -1841,8 +1839,8 @@ static void subscription_cb(pa_core *core, pa_subscription_event_type_t t, uint3
                 object_path = pa_dbusiface_client_get_path(client_iface);
 
                 pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-								   PA_DBUS_CORE_INTERFACE,
-								   signals[SIGNAL_CLIENT_REMOVED].name)));
+                                                                   PA_DBUS_CORE_INTERFACE,
+                                                                   signals[SIGNAL_CLIENT_REMOVED].name)));
                 pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &object_path, DBUS_TYPE_INVALID));
 
                 pa_dbusiface_client_free(client_iface);
@@ -1870,7 +1868,7 @@ static pa_hook_result_t sink_put_cb(void *hook_data, void *call_data, void *slot
     object_path = pa_dbusiface_device_get_path(d);
 
     pa_assert_se(pa_hashmap_put(c->sinks_by_index, PA_UINT32_TO_PTR(s->index), d) >= 0);
-    pa_assert_se(pa_hashmap_put(c->sinks_by_path, object_path, d) >= 0);
+    pa_assert_se(pa_hashmap_put(c->sinks_by_path, (char *) object_path, d) >= 0);
 
     pa_assert_se(signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
                                                       PA_DBUS_CORE_INTERFACE,
@@ -1924,7 +1922,7 @@ static pa_hook_result_t source_put_cb(void *hook_data, void *call_data, void *sl
     object_path = pa_dbusiface_device_get_path(d);
 
     pa_assert_se(pa_hashmap_put(c->sources_by_index, PA_UINT32_TO_PTR(s->index), d) >= 0);
-    pa_assert_se(pa_hashmap_put(c->sources_by_path, object_path, d) >= 0);
+    pa_assert_se(pa_hashmap_put(c->sources_by_path, (char *) object_path, d) >= 0);
 
     pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
                                                        PA_DBUS_CORE_INTERFACE,
@@ -1973,8 +1971,8 @@ static pa_hook_result_t extension_registered_cb(void *hook_data, void *call_data
     pa_assert(ext_name);
 
     pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-						       PA_DBUS_CORE_INTERFACE,
-						       signals[SIGNAL_NEW_EXTENSION].name)));
+                                                       PA_DBUS_CORE_INTERFACE,
+                                                       signals[SIGNAL_NEW_EXTENSION].name)));
     pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_STRING, &ext_name, DBUS_TYPE_INVALID));
 
     pa_dbus_protocol_send_signal(c->dbus_protocol, signal_msg);
@@ -1992,8 +1990,8 @@ static pa_hook_result_t extension_unregistered_cb(void *hook_data, void *call_da
     pa_assert(ext_name);
 
     pa_assert_se((signal_msg = dbus_message_new_signal(PA_DBUS_CORE_OBJECT_PATH,
-						       PA_DBUS_CORE_INTERFACE,
-						       signals[SIGNAL_EXTENSION_REMOVED].name)));
+                                                       PA_DBUS_CORE_INTERFACE,
+                                                       signals[SIGNAL_EXTENSION_REMOVED].name)));
     pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_STRING, &ext_name, DBUS_TYPE_INVALID));
 
     pa_dbus_protocol_send_signal(c->dbus_protocol, signal_msg);
@@ -2021,16 +2019,20 @@ pa_dbusiface_core *pa_dbusiface_core_new(pa_core *core) {
     c->core = core;
     c->subscription = pa_subscription_new(core, PA_SUBSCRIPTION_MASK_ALL, subscription_cb, c);
     c->dbus_protocol = pa_dbus_protocol_get(core);
-    c->cards = pa_hashmap_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
-    c->sinks_by_index = pa_hashmap_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
+    c->cards = pa_hashmap_new_full(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func, NULL, (pa_free_cb_t) pa_dbusiface_card_free);
+    c->sinks_by_index = pa_hashmap_new_full(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func, NULL,
+                                            (pa_free_cb_t) pa_dbusiface_device_free);
     c->sinks_by_path = pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func);
-    c->sources_by_index = pa_hashmap_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
+    c->sources_by_index = pa_hashmap_new_full(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func, NULL,
+                                              (pa_free_cb_t) pa_dbusiface_device_free);
     c->sources_by_path = pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func);
-    c->playback_streams = pa_hashmap_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
-    c->record_streams = pa_hashmap_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
-    c->samples = pa_hashmap_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
-    c->modules = pa_hashmap_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
-    c->clients = pa_hashmap_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
+    c->playback_streams = pa_hashmap_new_full(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func, NULL,
+                                              (pa_free_cb_t) pa_dbusiface_stream_free);
+    c->record_streams = pa_hashmap_new_full(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func, NULL,
+                                            (pa_free_cb_t) pa_dbusiface_stream_free);
+    c->samples = pa_hashmap_new_full(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func, NULL, (pa_free_cb_t) pa_dbusiface_sample_free);
+    c->modules = pa_hashmap_new_full(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func, NULL, (pa_free_cb_t) pa_dbusiface_module_free);
+    c->clients = pa_hashmap_new_full(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func, NULL, (pa_free_cb_t) pa_dbusiface_client_free);
     c->fallback_sink = pa_namereg_get_default_sink(core);
     c->fallback_source = pa_namereg_get_default_source(core);
     c->sink_put_slot = pa_hook_connect(&core->hooks[PA_CORE_HOOK_SINK_PUT], PA_HOOK_NORMAL, sink_put_cb, c);
@@ -2060,13 +2062,13 @@ pa_dbusiface_core *pa_dbusiface_core_new(pa_core *core) {
     PA_IDXSET_FOREACH(sink, core->sinks, idx) {
         device = pa_dbusiface_device_new_sink(c, sink);
         pa_hashmap_put(c->sinks_by_index, PA_UINT32_TO_PTR(idx), device);
-        pa_hashmap_put(c->sinks_by_path, pa_dbusiface_device_get_path(device), device);
+        pa_hashmap_put(c->sinks_by_path, (char *) pa_dbusiface_device_get_path(device), device);
     }
 
     PA_IDXSET_FOREACH(source, core->sources, idx) {
         device = pa_dbusiface_device_new_source(c, source);
         pa_hashmap_put(c->sources_by_index, PA_UINT32_TO_PTR(idx), device);
-        pa_hashmap_put(c->sources_by_path, pa_dbusiface_device_get_path(device), device);
+        pa_hashmap_put(c->sources_by_path, (char *) pa_dbusiface_device_get_path(device), device);
     }
 
     PA_IDXSET_FOREACH(sink_input, core->sink_inputs, idx)
@@ -2097,16 +2099,16 @@ void pa_dbusiface_core_free(pa_dbusiface_core *c) {
     /* Note that the order of freeing is important below.
      * Do not change it for the sake of tidiness without checking! */
     pa_subscription_free(c->subscription);
-    pa_hashmap_free(c->cards, (pa_free_cb_t) pa_dbusiface_card_free);
-    pa_hashmap_free(c->sinks_by_path, NULL);
-    pa_hashmap_free(c->sinks_by_index, (pa_free_cb_t) pa_dbusiface_device_free);
-    pa_hashmap_free(c->sources_by_path, NULL);
-    pa_hashmap_free(c->sources_by_index, (pa_free_cb_t) pa_dbusiface_device_free);
-    pa_hashmap_free(c->playback_streams, (pa_free_cb_t) pa_dbusiface_stream_free);
-    pa_hashmap_free(c->record_streams, (pa_free_cb_t) pa_dbusiface_stream_free);
-    pa_hashmap_free(c->samples, (pa_free_cb_t) pa_dbusiface_sample_free);
-    pa_hashmap_free(c->modules, (pa_free_cb_t) pa_dbusiface_module_free);
-    pa_hashmap_free(c->clients, (pa_free_cb_t) pa_dbusiface_client_free);
+    pa_hashmap_free(c->cards);
+    pa_hashmap_free(c->sinks_by_path);
+    pa_hashmap_free(c->sinks_by_index);
+    pa_hashmap_free(c->sources_by_path);
+    pa_hashmap_free(c->sources_by_index);
+    pa_hashmap_free(c->playback_streams);
+    pa_hashmap_free(c->record_streams);
+    pa_hashmap_free(c->samples);
+    pa_hashmap_free(c->modules);
+    pa_hashmap_free(c->clients);
     pa_hook_slot_free(c->sink_put_slot);
     pa_hook_slot_free(c->sink_unlink_slot);
     pa_hook_slot_free(c->source_put_slot);

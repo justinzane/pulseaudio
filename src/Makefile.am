@@ -46,11 +46,11 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/modules \
 	-I$(top_builddir)/src/modules \
 	-DPA_ALSA_PATHS_DIR=\"$(alsapathsdir)\" \
-	-DPA_ALSA_PROFILE_SETS_DIR=\"$(alsaprofilesetsdir)\"
-AM_CFLAGS = \
-	$(PTHREAD_CFLAGS) \
+	-DPA_ALSA_PROFILE_SETS_DIR=\"$(alsaprofilesetsdir)\" \
 	-DPA_SRCDIR=\"$(abs_srcdir)\" \
 	-DPA_BUILDDIR=\"$(abs_builddir)\"
+AM_CFLAGS = \
+	$(PTHREAD_CFLAGS)
 AM_CXXFLAGS = $(AM_CFLAGS)
 SERVER_CFLAGS = -D__INCLUDED_FROM_PULSE_AUDIO
 
@@ -95,12 +95,10 @@ EXTRA_DIST = \
 		depmod.py \
 		daemon/esdcompat.in \
 		daemon/start-pulseaudio-x11.in \
-		daemon/start-pulseaudio-kde.in \
 		utils/padsp.in \
 		utils/qpaeq \
 		modules/module-defs.h.m4 \
 		daemon/pulseaudio.desktop.in \
-		daemon/pulseaudio-kde.desktop.in \
 		map-file \
 		daemon/pulseaudio-system.conf \
 		modules/echo-cancel/adrian-license.txt
@@ -118,8 +116,7 @@ endif
 
 if HAVE_X11
 xdgautostart_in_files = \
-		daemon/pulseaudio.desktop.in \
-		daemon/pulseaudio-kde.desktop.in
+		daemon/pulseaudio.desktop.in
 xdgautostart_DATA = $(xdgautostart_in_files:.desktop.in=.desktop)
 @INTLTOOL_DESKTOP_RULE@
 endif
@@ -192,7 +189,7 @@ endif
 
 if HAVE_X11
 bin_PROGRAMS += pax11publish
-bin_SCRIPTS += start-pulseaudio-x11 start-pulseaudio-kde
+bin_SCRIPTS += start-pulseaudio-x11
 endif
 
 pacat_SOURCES = utils/pacat.c
@@ -223,6 +220,7 @@ pax11publish_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS)
 ###################################
 #         Test programs           #
 ###################################
+noinst_LTLIBRARIES =
 
 TESTS_default = \
 		mainloop-test \
@@ -261,7 +259,8 @@ TESTS_norun = \
 		rtstutter \
 		sig2str-test \
 		stripnul \
-		echo-cancel-test
+		echo-cancel-test \
+		lo-latency-test
 
 # These tests need a running pulseaudio daemon
 TESTS_daemon = \
@@ -272,6 +271,7 @@ TESTS_daemon = \
 
 if !OS_IS_WIN32
 TESTS_default += \
+		srbchannel-test \
 		sigbus-test \
 		usergroup-test
 endif
@@ -349,6 +349,11 @@ format_test_SOURCES = tests/format-test.c
 format_test_CFLAGS = $(AM_CFLAGS) $(LIBCHECK_CFLAGS)
 format_test_LDADD = $(AM_LDADD) libpulsecore-@PA_MAJORMINOR@.la libpulse.la libpulsecommon-@PA_MAJORMINOR@.la
 format_test_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS) $(LIBCHECK_LIBS)
+
+srbchannel_test_SOURCES = tests/srbchannel-test.c
+srbchannel_test_CFLAGS = $(AM_CFLAGS) $(LIBCHECK_CFLAGS)
+srbchannel_test_LDADD = $(AM_LDADD) libpulse.la libpulsecommon-@PA_MAJORMINOR@.la
+srbchannel_test_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS) $(LIBCHECK_LIBS)
 
 get_binary_name_test_SOURCES = tests/get-binary-name-test.c
 get_binary_name_test_CFLAGS = $(AM_CFLAGS) $(LIBCHECK_CFLAGS)
@@ -505,17 +510,17 @@ proplist_test_LDADD = $(AM_LDADD) libpulsecore-@PA_MAJORMINOR@.la libpulse.la li
 proplist_test_CFLAGS = $(AM_CFLAGS) $(LIBCHECK_CFLAGS)
 proplist_test_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS) $(LIBCHECK_LIBS)
 
-cpu_test_SOURCES = tests/cpu-test.c
+cpu_test_SOURCES = tests/cpu-test.c tests/runtime-test-util.h
 cpu_test_LDADD = $(AM_LDADD) libpulsecore-@PA_MAJORMINOR@.la libpulse.la libpulsecommon-@PA_MAJORMINOR@.la
 cpu_test_CFLAGS = $(AM_CFLAGS) $(LIBCHECK_CFLAGS)
 cpu_test_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS) $(LIBCHECK_LIBS)
 
-mult_s16_test_SOURCES = tests/mult-s16-test.c
+mult_s16_test_SOURCES = tests/mult-s16-test.c tests/runtime-test-util.h
 mult_s16_test_LDADD = $(AM_LDADD) libpulsecore-@PA_MAJORMINOR@.la libpulse.la libpulsecommon-@PA_MAJORMINOR@.la
 mult_s16_test_CFLAGS = $(AM_CFLAGS) $(LIBCHECK_CFLAGS)
 mult_s16_test_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS) $(LIBCHECK_LIBS)
 
-mix_special_test_SOURCES = tests/mix-special-test.c
+mix_special_test_SOURCES = tests/mix-special-test.c tests/runtime-test-util.h
 mix_special_test_LDADD = $(AM_LDADD) libpulsecore-@PA_MAJORMINOR@.la libpulse.la libpulsecommon-@PA_MAJORMINOR@.la
 mix_special_test_CFLAGS = $(AM_CFLAGS) $(LIBCHECK_CFLAGS)
 mix_special_test_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS) $(LIBCHECK_LIBS)
@@ -574,6 +579,16 @@ echo_cancel_test_CXXFLAGS = $(module_echo_cancel_la_CXXFLAGS) -DECHO_CANCEL_TEST
 endif
 echo_cancel_test_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS)
 
+liblo_test_util_la_SOURCES = tests/lo-test-util.h tests/lo-test-util.c
+liblo_test_util_la_LIBADD = libpulsecore-@PA_MAJORMINOR@.la
+liblo_test_util_la_LDFLAGS = -avoid-version
+noinst_LTLIBRARIES += liblo-test-util.la
+
+lo_latency_test_SOURCES = tests/lo-latency-test.c
+lo_latency_test_LDADD = $(AM_LDADD) libpulse.la liblo-test-util.la
+lo_latency_test_CFLAGS = $(AM_CFLAGS) $(LIBCHECK_CFLAGS)
+lo_latency_test_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS) $(LIBCHECK_LIBS)
+
 ###################################
 #         Common library          #
 ###################################
@@ -589,6 +604,7 @@ pkglib_LTLIBRARIES = \
 libpulsecommon_@PA_MAJORMINOR@_la_SOURCES = \
 		pulse/client-conf.c pulse/client-conf.h \
 		pulse/fork-detect.c pulse/fork-detect.h \
+		pulse/format.c pulse/format.h \
 		pulse/xmalloc.c pulse/xmalloc.h \
 		pulse/proplist.c pulse/proplist.h \
 		pulse/utf8.c pulse/utf8.h \
@@ -602,11 +618,13 @@ libpulsecommon_@PA_MAJORMINOR@_la_SOURCES = \
 		pulsecore/authkey.c pulsecore/authkey.h \
 		pulsecore/conf-parser.c pulsecore/conf-parser.h \
 		pulsecore/core-error.c pulsecore/core-error.h \
+		pulsecore/core-format.c pulsecore/core-format.h \
 		pulsecore/core-rtclock.c pulsecore/core-rtclock.h \
 		pulsecore/core-util.c pulsecore/core-util.h \
 		pulsecore/creds.h \
 		pulsecore/dynarray.c pulsecore/dynarray.h \
 		pulsecore/endianmacros.h \
+		pulsecore/fdsem.c pulsecore/fdsem.h \
 		pulsecore/flist.c pulsecore/flist.h \
 		pulsecore/g711.c pulsecore/g711.h \
 		pulsecore/hashmap.c pulsecore/hashmap.h \
@@ -640,6 +658,7 @@ libpulsecommon_@PA_MAJORMINOR@_la_SOURCES = \
 		pulsecore/queue.c pulsecore/queue.h \
 		pulsecore/random.c pulsecore/random.h \
 		pulsecore/refcnt.h \
+		pulsecore/srbchannel.c pulsecore/srbchannel.h \
 		pulsecore/sample-util.c pulsecore/sample-util.h \
 		pulsecore/shm.c pulsecore/shm.h \
 		pulsecore/bitset.c pulsecore/bitset.h \
@@ -663,9 +682,9 @@ else
 libpulsecommon_@PA_MAJORMINOR@_la_SOURCES += pulsecore/poll-posix.c pulsecore/poll.h
 endif
 
-libpulsecommon_@PA_MAJORMINOR@_la_CFLAGS = $(AM_CFLAGS) $(LIBSNDFILE_CFLAGS)
+libpulsecommon_@PA_MAJORMINOR@_la_CFLAGS = $(AM_CFLAGS) $(LIBJSON_CFLAGS) $(LIBSNDFILE_CFLAGS)
 libpulsecommon_@PA_MAJORMINOR@_la_LDFLAGS = $(AM_LDFLAGS) -avoid-version
-libpulsecommon_@PA_MAJORMINOR@_la_LIBADD = $(AM_LIBADD) $(LIBWRAP_LIBS) $(WINSOCK_LIBS) $(LTLIBICONV) $(LIBSNDFILE_LIBS)
+libpulsecommon_@PA_MAJORMINOR@_la_LIBADD = $(AM_LIBADD) $(LIBJSON_LIBS)  $(LIBWRAP_LIBS) $(WINSOCK_LIBS) $(LTLIBICONV) $(LIBSNDFILE_LIBS)
 
 if HAVE_X11
 libpulsecommon_@PA_MAJORMINOR@_la_SOURCES += \
@@ -673,6 +692,11 @@ libpulsecommon_@PA_MAJORMINOR@_la_SOURCES += \
 		pulsecore/x11prop.c pulsecore/x11prop.h
 libpulsecommon_@PA_MAJORMINOR@_la_CFLAGS += $(X11_CFLAGS)
 libpulsecommon_@PA_MAJORMINOR@_la_LDFLAGS += $(X11_LIBS)
+endif
+
+if HAVE_SYSTEMD_JOURNAL
+libpulsecommon_@PA_MAJORMINOR@_la_CFLAGS += $(JOURNAL_FLAGS)
+libpulsecommon_@PA_MAJORMINOR@_la_LDFLAGS += $(JOURNAL_LIBS)
 endif
 
 # proplist-util.h uses these header files, but not the library itself!
@@ -730,6 +754,7 @@ pulseinclude_HEADERS = \
 		pulse/channelmap.h \
 		pulse/context.h \
 		pulse/def.h \
+		pulse/direction.h \
 		pulse/error.h \
 		pulse/ext-device-manager.h \
 		pulse/ext-device-restore.h \
@@ -775,6 +800,7 @@ libpulse_la_SOURCES = \
 		pulse/channelmap.c pulse/channelmap.h \
 		pulse/context.c pulse/context.h \
 		pulse/def.h \
+		pulse/direction.c pulse/direction.h \
 		pulse/error.c pulse/error.h \
 		pulse/ext-device-manager.c pulse/ext-device-manager.h \
 		pulse/ext-device-restore.c pulse/ext-device-restore.h \
@@ -849,7 +875,6 @@ libpulsedsp_la_LDFLAGS = $(AM_LDFLAGS) -avoid-version -disable-static
 ###################################
 
 lib_LTLIBRARIES += libpulsecore-@PA_MAJORMINOR@.la
-noinst_LTLIBRARIES =
 
 # Pure core stuff
 libpulsecore_@PA_MAJORMINOR@_la_SOURCES = \
@@ -863,7 +888,6 @@ libpulsecore_@PA_MAJORMINOR@_la_SOURCES = \
 		pulsecore/core-scache.c pulsecore/core-scache.h \
 		pulsecore/core-subscribe.c pulsecore/core-subscribe.h \
 		pulsecore/core.c pulsecore/core.h \
-		pulsecore/fdsem.c pulsecore/fdsem.h \
 		pulsecore/hook-list.c pulsecore/hook-list.h \
 		pulsecore/ltdl-helper.c pulsecore/ltdl-helper.h \
 		pulsecore/modargs.c pulsecore/modargs.h \
@@ -878,6 +902,7 @@ libpulsecore_@PA_MAJORMINOR@_la_SOURCES = \
 		pulsecore/remap_mmx.c pulsecore/remap_sse.c \
 		pulsecore/resampler.c pulsecore/resampler.h \
 		pulsecore/rtpoll.c pulsecore/rtpoll.h \
+		pulsecore/stream-util.c pulsecore/stream-util.h \
 		pulsecore/mix.c pulsecore/mix.h \
 		pulsecore/cpu.h \
 		pulsecore/cpu-arm.c pulsecore/cpu-arm.h \
@@ -905,16 +930,18 @@ libpulsecore_@PA_MAJORMINOR@_la_LDFLAGS = $(AM_LDFLAGS) -avoid-version
 libpulsecore_@PA_MAJORMINOR@_la_LIBADD = $(AM_LIBADD) $(LIBLTDL) $(LIBSAMPLERATE_LIBS) $(LIBSPEEX_LIBS) $(LIBSNDFILE_LIBS) $(WINSOCK_LIBS) $(LTLIBICONV) libpulsecommon-@PA_MAJORMINOR@.la libpulse.la libpulsecore-foreign.la
 
 if HAVE_NEON
-noinst_LTLIBRARIES += libpulsecore_sconv_neon.la libpulsecore_mix_neon.la
+noinst_LTLIBRARIES += libpulsecore_sconv_neon.la libpulsecore_mix_neon.la libpulsecore_remap_neon.la
 libpulsecore_sconv_neon_la_SOURCES = pulsecore/sconv_neon.c
 libpulsecore_sconv_neon_la_CFLAGS = $(AM_CFLAGS) $(NEON_CFLAGS)
 libpulsecore_mix_neon_la_SOURCES = pulsecore/mix_neon.c
 libpulsecore_mix_neon_la_CFLAGS = $(AM_CFLAGS) $(NEON_CFLAGS)
-libpulsecore_@PA_MAJORMINOR@_la_LIBADD += libpulsecore_sconv_neon.la libpulsecore_mix_neon.la
+libpulsecore_remap_neon_la_SOURCES = pulsecore/remap_neon.c
+libpulsecore_remap_neon_la_CFLAGS = $(AM_CFLAGS) $(NEON_CFLAGS)
+libpulsecore_@PA_MAJORMINOR@_la_LIBADD += libpulsecore_sconv_neon.la libpulsecore_mix_neon.la libpulsecore_remap_neon.la
 endif
 
-if HAVE_ORC
 ORC_SOURCE += pulsecore/svolume
+if HAVE_ORC
 libpulsecore_@PA_MAJORMINOR@_la_SOURCES += pulsecore/svolume_orc.c
 nodist_libpulsecore_@PA_MAJORMINOR@_la_SOURCES = pulsecore/svolume-orc-gen.c pulsecore/svolume-orc-gen.h
 libpulsecore_@PA_MAJORMINOR@_la_CFLAGS += $(ORC_CFLAGS)
@@ -1086,6 +1113,8 @@ modlibexec_LTLIBRARIES += \
 		module-remap-sink.la \
 		module-remap-source.la \
 		module-ladspa-sink.la \
+		module-tunnel-sink-new.la \
+		module-tunnel-source-new.la \
 		module-tunnel-sink.la \
 		module-lfe-lowpass-sink.la \
 		module-tunnel-source.la \
@@ -1183,6 +1212,7 @@ dist_alsaprofilesets_DATA = \
 		modules/alsa/mixer/profile-sets/maudio-fasttrack-pro.conf \
 		modules/alsa/mixer/profile-sets/native-instruments-audio4dj.conf \
 		modules/alsa/mixer/profile-sets/native-instruments-audio8dj.conf \
+		modules/alsa/mixer/profile-sets/native-instruments-traktor-audio2.conf \
 		modules/alsa/mixer/profile-sets/native-instruments-traktor-audio6.conf \
 		modules/alsa/mixer/profile-sets/native-instruments-traktor-audio10.conf \
 		modules/alsa/mixer/profile-sets/native-instruments-traktorkontrol-s4.conf \
@@ -1219,6 +1249,7 @@ dist_alsapaths_DATA = \
 		modules/alsa/mixer/paths/analog-output-desktop-speaker.conf \
 		modules/alsa/mixer/paths/analog-output-headphones.conf \
 		modules/alsa/mixer/paths/analog-output-headphones-2.conf \
+		modules/alsa/mixer/paths/analog-output-lineout.conf \
 		modules/alsa/mixer/paths/analog-output-mono.conf \
 		modules/alsa/mixer/paths/iec958-stereo-output.conf \
 		modules/alsa/mixer/paths/hdmi-output-0.conf \
@@ -1308,16 +1339,27 @@ endif
 
 if HAVE_BLUEZ
 modlibexec_LTLIBRARIES += \
-		libbluetooth-util.la \
-		module-bluetooth-proximity.la \
 		module-bluetooth-discover.la \
-		module-bluetooth-policy.la \
-		module-bluetooth-device.la
-
-pulselibexec_PROGRAMS += \
-		proximity-helper
+		module-bluetooth-policy.la
 endif
 
+if HAVE_BLUEZ_4
+modlibexec_LTLIBRARIES += \
+		libbluez4-util.la \
+		module-bluez4-discover.la \
+		module-bluez4-device.la
+endif
+
+if HAVE_BLUEZ_5
+modlibexec_LTLIBRARIES += \
+		libbluez5-util.la \
+		module-bluez5-discover.la \
+		module-bluez5-device.la
+endif
+
+# RAOP depends on RTP, and we don't support RTP on Windows, see comment at
+# librtp.la above.
+if !OS_IS_WIN32
 if HAVE_OPENSSL
 modlibexec_LTLIBRARIES += \
 		libraop.la \
@@ -1325,6 +1367,7 @@ modlibexec_LTLIBRARIES += \
 if HAVE_AVAHI
 modlibexec_LTLIBRARIES += \
 		module-raop-discover.la
+endif
 endif
 endif
 
@@ -1357,6 +1400,8 @@ SYMDEF_FILES = \
 		module-lfe-lowpass-sink-symdef.h \
 		module-equalizer-sink-symdef.h \
 		module-match-symdef.h \
+		module-tunnel-sink-new-symdef.h \
+		module-tunnel-source-new-symdef.h \
 		module-tunnel-sink-symdef.h \
 		module-tunnel-source-symdef.h \
 		module-null-sink-symdef.h \
@@ -1403,10 +1448,12 @@ SYMDEF_FILES = \
 		module-hal-detect-symdef.h \
 		module-udev-detect-symdef.h \
 		module-systemd-login-symdef.h \
-		module-bluetooth-proximity-symdef.h \
-		module-bluetooth-discover-symdef.h \
 		module-bluetooth-policy-symdef.h \
-		module-bluetooth-device-symdef.h \
+		module-bluetooth-discover-symdef.h \
+		module-bluez4-discover-symdef.h \
+		module-bluez4-device-symdef.h \
+		module-bluez5-discover-symdef.h \
+		module-bluez5-device-symdef.h \
 		module-raop-sink-symdef.h \
 		module-raop-discover-symdef.h \
 		module-gconf-symdef.h \
@@ -1632,14 +1679,22 @@ module_match_la_SOURCES = modules/module-match.c
 module_match_la_LDFLAGS = $(MODULE_LDFLAGS)
 module_match_la_LIBADD = $(MODULE_LIBADD)
 
+module_tunnel_sink_new_la_SOURCES = modules/module-tunnel-sink-new.c
+module_tunnel_sink_new_la_LDFLAGS = $(MODULE_LDFLAGS)
+module_tunnel_sink_new_la_LIBADD = $(MODULE_LIBADD)
+
+module_tunnel_source_new_la_SOURCES = modules/module-tunnel-source-new.c
+module_tunnel_source_new_la_LDFLAGS = $(MODULE_LDFLAGS)
+module_tunnel_source_new_la_LIBADD = $(MODULE_LIBADD)
+
 module_tunnel_sink_la_SOURCES = modules/module-tunnel.c
-module_tunnel_sink_la_CFLAGS = -DTUNNEL_SINK=1 $(AM_CFLAGS)
+module_tunnel_sink_la_CFLAGS = -DTUNNEL_SINK=1 $(AM_CFLAGS) $(X11_CFLAGS)
 module_tunnel_sink_la_LDFLAGS = $(MODULE_LDFLAGS)
-module_tunnel_sink_la_LIBADD = $(MODULE_LIBADD)
+module_tunnel_sink_la_LIBADD = $(MODULE_LIBADD) $(X11_LIBS)
 
 module_tunnel_source_la_SOURCES = modules/module-tunnel.c
-module_tunnel_source_la_LDFLAGS = $(MODULE_LDFLAGS)
-module_tunnel_source_la_LIBADD = $(MODULE_LIBADD)
+module_tunnel_source_la_LDFLAGS = $(MODULE_LDFLAGS) $(X11_CFLAGS)
+module_tunnel_source_la_LIBADD = $(MODULE_LIBADD) $(X11_LIBS)
 
 module_loopback_la_SOURCES = modules/module-loopback.c
 module_loopback_la_LDFLAGS = $(MODULE_LDFLAGS)
@@ -1914,8 +1969,8 @@ module_echo_cancel_la_SOURCES += \
 		modules/echo-cancel/adrian-aec.c modules/echo-cancel/adrian-aec.h \
 		modules/echo-cancel/adrian.c modules/echo-cancel/adrian.h
 module_echo_cancel_la_CFLAGS += -DHAVE_ADRIAN_EC=1
-if HAVE_ORC
 ORC_SOURCE += modules/echo-cancel/adrian-aec
+if HAVE_ORC
 nodist_module_echo_cancel_la_SOURCES = \
 		modules/echo-cancel/adrian-aec-orc-gen.c \
 		modules/echo-cancel/adrian-aec-orc-gen.h
@@ -1999,41 +2054,55 @@ gconf_helper_LDADD = $(AM_LDADD) libpulsecore-@PA_MAJORMINOR@.la libpulsecommon-
 gconf_helper_CFLAGS = $(AM_CFLAGS) $(GCONF_CFLAGS)
 gconf_helper_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS)
 
-# Bluetooth proximity
-module_bluetooth_proximity_la_SOURCES = modules/bluetooth/module-bluetooth-proximity.c
-module_bluetooth_proximity_la_LDFLAGS = $(MODULE_LDFLAGS)
-module_bluetooth_proximity_la_LIBADD = $(MODULE_LIBADD) $(DBUS_LIBS)
-module_bluetooth_proximity_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS) -DPA_BT_PROXIMITY_HELPER=\"$(pulselibexecdir)/proximity-helper\"
-
-proximity_helper_SOURCES = modules/bluetooth/proximity-helper.c
-proximity_helper_LDADD = $(AM_LDADD) $(BLUEZ_LIBS)
-proximity_helper_CFLAGS = $(AM_CFLAGS) $(BLUEZ_CFLAGS)
-proximity_helper_LDFLAGS = $(AM_LDFLAGS) $(BINLDFLAGS)
-
-# Bluetooth sink / source
-module_bluetooth_discover_la_SOURCES = modules/bluetooth/module-bluetooth-discover.c
-module_bluetooth_discover_la_LDFLAGS = $(MODULE_LDFLAGS)
-module_bluetooth_discover_la_LIBADD = $(MODULE_LIBADD) $(DBUS_LIBS) libbluetooth-util.la
-module_bluetooth_discover_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS)
-
-
-libbluetooth_util_la_SOURCES = \
-		modules/bluetooth/a2dp-codecs.h \
-		modules/bluetooth/bluetooth-util.c \
-		modules/bluetooth/bluetooth-util.h
-libbluetooth_util_la_LDFLAGS = -avoid-version
-libbluetooth_util_la_LIBADD = $(MODULE_LIBADD) $(DBUS_LIBS)
-libbluetooth_util_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS)
-
-module_bluetooth_device_la_SOURCES = modules/bluetooth/module-bluetooth-device.c modules/bluetooth/rtp.h
-module_bluetooth_device_la_LDFLAGS = $(MODULE_LDFLAGS)
-module_bluetooth_device_la_LIBADD = $(MODULE_LIBADD) $(DBUS_LIBS) $(SBC_LIBS) libbluetooth-util.la
-module_bluetooth_device_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS) $(SBC_CFLAGS)
-
+# Bluetooth policy
 module_bluetooth_policy_la_SOURCES = modules/bluetooth/module-bluetooth-policy.c
 module_bluetooth_policy_la_LDFLAGS = $(MODULE_LDFLAGS)
 module_bluetooth_policy_la_LIBADD = $(MODULE_LIBADD)
 module_bluetooth_policy_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS)
+
+# Bluetooth discover
+module_bluetooth_discover_la_SOURCES = modules/bluetooth/module-bluetooth-discover.c
+module_bluetooth_discover_la_LDFLAGS = $(MODULE_LDFLAGS)
+module_bluetooth_discover_la_LIBADD = $(MODULE_LIBADD)
+module_bluetooth_discover_la_CFLAGS = $(AM_CFLAGS)
+
+# Bluetooth BlueZ 4 sink / source
+module_bluez4_discover_la_SOURCES = modules/bluetooth/module-bluez4-discover.c
+module_bluez4_discover_la_LDFLAGS = $(MODULE_LDFLAGS)
+module_bluez4_discover_la_LIBADD = $(MODULE_LIBADD) $(DBUS_LIBS) libbluez4-util.la
+module_bluez4_discover_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS)
+
+libbluez4_util_la_SOURCES = \
+		modules/bluetooth/a2dp-codecs.h \
+		modules/bluetooth/bluez4-util.c \
+		modules/bluetooth/bluez4-util.h
+libbluez4_util_la_LDFLAGS = -avoid-version
+libbluez4_util_la_LIBADD = $(MODULE_LIBADD) $(DBUS_LIBS)
+libbluez4_util_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS)
+
+module_bluez4_device_la_SOURCES = modules/bluetooth/module-bluez4-device.c modules/bluetooth/rtp.h
+module_bluez4_device_la_LDFLAGS = $(MODULE_LDFLAGS)
+module_bluez4_device_la_LIBADD = $(MODULE_LIBADD) $(DBUS_LIBS) $(SBC_LIBS) libbluez4-util.la
+module_bluez4_device_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS) $(SBC_CFLAGS)
+
+# Bluetooth BlueZ 5 sink / source
+libbluez5_util_la_SOURCES = \
+		modules/bluetooth/bluez5-util.c \
+		modules/bluetooth/bluez5-util.h \
+		modules/bluetooth/a2dp-codecs.h
+libbluez5_util_la_LDFLAGS = -avoid-version
+libbluez5_util_la_LIBADD = $(MODULE_LIBADD) $(DBUS_LIBS)
+libbluez5_util_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS)
+
+module_bluez5_discover_la_SOURCES = modules/bluetooth/module-bluez5-discover.c
+module_bluez5_discover_la_LDFLAGS = $(MODULE_LDFLAGS)
+module_bluez5_discover_la_LIBADD = $(MODULE_LIBADD) $(DBUS_LIBS) libbluez5-util.la
+module_bluez5_discover_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS)
+
+module_bluez5_device_la_SOURCES = modules/bluetooth/module-bluez5-device.c
+module_bluez5_device_la_LDFLAGS = $(MODULE_LDFLAGS)
+module_bluez5_device_la_LIBADD = $(MODULE_LIBADD) $(SBC_LIBS) libbluez5-util.la
+module_bluez5_device_la_CFLAGS = $(AM_CFLAGS) $(SBC_CFLAGS)
 
 # Apple Airtunes/RAOP
 module_raop_sink_la_SOURCES = modules/raop/module-raop-sink.c
@@ -2056,8 +2125,8 @@ module_rygel_media_server_la_CFLAGS = $(AM_CFLAGS) $(DBUS_CFLAGS)
 #        Some minor stuff         #
 ###################################
  
-CLEANFILES += daemon/pulseaudio.desktop daemon/pulseaudio-kde.desktop
-DISTCLEANFILES = esdcompat client.conf default.pa system.pa daemon.conf start-pulseaudio-x11 start-pulseaudio-kde
+CLEANFILES += daemon/pulseaudio.desktop
+DISTCLEANFILES = esdcompat client.conf default.pa system.pa daemon.conf start-pulseaudio-x11
 
 if OS_IS_WIN32
 SYMLINK_PROGRAM=cd $(DESTDIR)$(bindir) && cp
@@ -2065,10 +2134,6 @@ else
 SYMLINK_PROGRAM=ln -sf
 endif
 install-exec-hook:
-if HAVE_BLUEZ
-	-chown root $(DESTDIR)$(pulselibexecdir)/proximity-helper
-	-chmod u+s $(DESTDIR)$(pulselibexecdir)/proximity-helper
-endif
 	$(SYMLINK_PROGRAM) pacat$(EXEEXT) $(DESTDIR)$(bindir)/parec$(EXEEXT)
 	$(SYMLINK_PROGRAM) pacat$(EXEEXT) $(DESTDIR)$(bindir)/pamon$(EXEEXT)
 	$(SYMLINK_PROGRAM) pacat$(EXEEXT) $(DESTDIR)$(bindir)/paplay$(EXEEXT)

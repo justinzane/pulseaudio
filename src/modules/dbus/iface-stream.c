@@ -56,7 +56,7 @@ struct pa_dbusiface_stream {
     dbus_bool_t mute;
     pa_proplist *proplist;
 
-    pa_bool_t has_volume;
+    bool has_volume;
 
     pa_dbus_protocol *dbus_protocol;
     pa_subscription *subscription;
@@ -356,7 +356,7 @@ static void handle_get_volume(DBusConnection *conn, DBusMessage *msg, void *user
 
 static void handle_set_volume(DBusConnection *conn, DBusMessage *msg, DBusMessageIter *iter, void *userdata) {
     pa_dbusiface_stream *s = userdata;
-    pa_bool_t volume_writable = TRUE;
+    bool volume_writable = true;
     DBusMessageIter array_iter;
     int stream_channels = 0;
     dbus_uint32_t *volume = NULL;
@@ -369,7 +369,7 @@ static void handle_set_volume(DBusConnection *conn, DBusMessage *msg, DBusMessag
     pa_assert(iter);
     pa_assert(s);
 
-    volume_writable = (s->type == STREAM_TYPE_PLAYBACK) ? s->sink_input->volume_writable : FALSE;
+    volume_writable = (s->type == STREAM_TYPE_PLAYBACK) ? s->sink_input->volume_writable : false;
 
     if (!s->has_volume || !volume_writable) {
         char *str = stream_to_string(s);
@@ -405,7 +405,7 @@ static void handle_set_volume(DBusConnection *conn, DBusMessage *msg, DBusMessag
         new_vol.values[i] = volume[i];
     }
 
-    pa_sink_input_set_volume(s->sink_input, &new_vol, TRUE, TRUE);
+    pa_sink_input_set_volume(s->sink_input, &new_vol, true, true);
 
     pa_dbus_send_empty_reply(conn, msg);
 }
@@ -441,7 +441,7 @@ static void handle_set_mute(DBusConnection *conn, DBusMessage *msg, DBusMessageI
         return;
     }
 
-    pa_sink_input_set_mute(s->sink_input, mute, TRUE);
+    pa_sink_input_set_mute(s->sink_input, mute, true);
 
     pa_dbus_send_empty_reply(conn, msg);
 }
@@ -621,7 +621,7 @@ static void handle_move(DBusConnection *conn, DBusMessage *msg, void *userdata) 
             return;
         }
 
-        if (pa_sink_input_move_to(s->sink_input, sink, TRUE) < 0) {
+        if (pa_sink_input_move_to(s->sink_input, sink, true) < 0) {
             pa_dbus_send_error(conn, msg, DBUS_ERROR_FAILED,
                                "Moving playback stream %u to sink %s failed.", s->sink_input->index, sink->name);
             return;
@@ -634,7 +634,7 @@ static void handle_move(DBusConnection *conn, DBusMessage *msg, void *userdata) 
             return;
         }
 
-        if (pa_source_output_move_to(s->source_output, source, TRUE) < 0) {
+        if (pa_source_output_move_to(s->source_output, source, true) < 0) {
             pa_dbus_send_error(conn, msg, DBUS_ERROR_FAILED,
                                "Moving record stream %u to source %s failed.", s->source_output->index, source->name);
             return;
@@ -692,8 +692,8 @@ static void subscription_cb(pa_core *c, pa_subscription_event_type_t t, uint32_t
             new_device_path = pa_dbusiface_core_get_sink_path(s->core, new_sink);
 
             pa_assert_se(signal_msg = dbus_message_new_signal(s->path,
-							      PA_DBUSIFACE_STREAM_INTERFACE,
-							      signals[SIGNAL_DEVICE_UPDATED].name));
+                                                              PA_DBUSIFACE_STREAM_INTERFACE,
+                                                              signals[SIGNAL_DEVICE_UPDATED].name));
             pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &new_device_path, DBUS_TYPE_INVALID));
 
             pa_dbus_protocol_send_signal(s->dbus_protocol, signal_msg);
@@ -710,8 +710,8 @@ static void subscription_cb(pa_core *c, pa_subscription_event_type_t t, uint32_t
             new_device_path = pa_dbusiface_core_get_source_path(s->core, new_source);
 
             pa_assert_se(signal_msg = dbus_message_new_signal(s->path,
-							      PA_DBUSIFACE_STREAM_INTERFACE,
-							      signals[SIGNAL_DEVICE_UPDATED].name));
+                                                              PA_DBUSIFACE_STREAM_INTERFACE,
+                                                              signals[SIGNAL_DEVICE_UPDATED].name));
             pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_OBJECT_PATH, &new_device_path, DBUS_TYPE_INVALID));
 
             pa_dbus_protocol_send_signal(s->dbus_protocol, signal_msg);
@@ -726,8 +726,8 @@ static void subscription_cb(pa_core *c, pa_subscription_event_type_t t, uint32_t
         s->sample_rate = new_sample_rate;
 
         pa_assert_se(signal_msg = dbus_message_new_signal(s->path,
-							  PA_DBUSIFACE_STREAM_INTERFACE,
-							  signals[SIGNAL_SAMPLE_RATE_UPDATED].name));
+                                                          PA_DBUSIFACE_STREAM_INTERFACE,
+                                                          signals[SIGNAL_SAMPLE_RATE_UPDATED].name));
         pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_UINT32, &s->sample_rate, DBUS_TYPE_INVALID));
 
         pa_dbus_protocol_send_signal(s->dbus_protocol, signal_msg);
@@ -736,12 +736,12 @@ static void subscription_cb(pa_core *c, pa_subscription_event_type_t t, uint32_t
     }
 
     if (s->type == STREAM_TYPE_PLAYBACK) {
-        pa_bool_t new_mute = FALSE;
+        bool new_mute = false;
 
         if (s->has_volume) {
             pa_cvolume new_volume;
 
-            pa_sink_input_get_volume(s->sink_input, &new_volume, TRUE);
+            pa_sink_input_get_volume(s->sink_input, &new_volume, true);
 
             if (!pa_cvolume_equal(&s->volume, &new_volume)) {
                 dbus_uint32_t volume[PA_CHANNELS_MAX];
@@ -765,14 +765,14 @@ static void subscription_cb(pa_core *c, pa_subscription_event_type_t t, uint32_t
             }
         }
 
-        new_mute = pa_sink_input_get_mute(s->sink_input);
+        new_mute = s->sink_input->muted;
 
         if (s->mute != new_mute) {
             s->mute = new_mute;
 
             pa_assert_se(signal_msg = dbus_message_new_signal(s->path,
-							      PA_DBUSIFACE_STREAM_INTERFACE,
-							      signals[SIGNAL_MUTE_UPDATED].name));
+                                                              PA_DBUSIFACE_STREAM_INTERFACE,
+                                                              signals[SIGNAL_MUTE_UPDATED].name));
             pa_assert_se(dbus_message_append_args(signal_msg, DBUS_TYPE_BOOLEAN, &s->mute, DBUS_TYPE_INVALID));
 
             pa_dbus_protocol_send_signal(s->dbus_protocol, signal_msg);
@@ -789,8 +789,8 @@ static void subscription_cb(pa_core *c, pa_subscription_event_type_t t, uint32_t
         pa_proplist_update(s->proplist, PA_UPDATE_SET, new_proplist);
 
         pa_assert_se(signal_msg = dbus_message_new_signal(s->path,
-							  PA_DBUSIFACE_STREAM_INTERFACE,
-							  signals[SIGNAL_PROPERTY_LIST_UPDATED].name));
+                                                          PA_DBUSIFACE_STREAM_INTERFACE,
+                                                          signals[SIGNAL_PROPERTY_LIST_UPDATED].name));
         dbus_message_iter_init_append(signal_msg, &msg_iter);
         pa_dbus_append_proplist(&msg_iter, s->proplist);
 
@@ -829,8 +829,8 @@ static pa_hook_result_t send_event_cb(void *hook_data, void *call_data, void *sl
     }
 
     pa_assert_se(signal_msg = dbus_message_new_signal(s->path,
-						      PA_DBUSIFACE_STREAM_INTERFACE,
-						      signals[SIGNAL_STREAM_EVENT].name));
+                                                      PA_DBUSIFACE_STREAM_INTERFACE,
+                                                      signals[SIGNAL_STREAM_EVENT].name));
     dbus_message_iter_init_append(signal_msg, &msg_iter);
     pa_assert_se(dbus_message_iter_append_basic(&msg_iter, DBUS_TYPE_STRING, &name));
     pa_dbus_append_proplist(&msg_iter, property_list);
@@ -857,11 +857,11 @@ pa_dbusiface_stream *pa_dbusiface_stream_new_playback(pa_dbusiface_core *core, p
     s->has_volume = pa_sink_input_is_volume_readable(sink_input);
 
     if (s->has_volume)
-        pa_sink_input_get_volume(sink_input, &s->volume, TRUE);
+        pa_sink_input_get_volume(sink_input, &s->volume, true);
     else
         pa_cvolume_init(&s->volume);
 
-    s->mute = pa_sink_input_get_mute(sink_input);
+    s->mute = sink_input->muted;
     s->proplist = pa_proplist_copy(sink_input->proplist);
     s->dbus_protocol = pa_dbus_protocol_get(sink_input->core);
     s->subscription = pa_subscription_new(sink_input->core, PA_SUBSCRIPTION_MASK_SINK_INPUT, subscription_cb, s);
@@ -889,9 +889,9 @@ pa_dbusiface_stream *pa_dbusiface_stream_new_record(pa_dbusiface_core *core, pa_
     s->source = pa_source_ref(source_output->source);
     s->sample_rate = source_output->sample_spec.rate;
     pa_cvolume_init(&s->volume);
-    s->mute = FALSE;
+    s->mute = false;
     s->proplist = pa_proplist_copy(source_output->proplist);
-    s->has_volume = FALSE;
+    s->has_volume = false;
     s->dbus_protocol = pa_dbus_protocol_get(source_output->core);
     s->subscription = pa_subscription_new(source_output->core, PA_SUBSCRIPTION_MASK_SOURCE_OUTPUT, subscription_cb, s);
     s->send_event_slot = pa_hook_connect(&source_output->core->hooks[PA_CORE_HOOK_SOURCE_OUTPUT_SEND_EVENT],

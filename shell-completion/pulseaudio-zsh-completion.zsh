@@ -1,4 +1,4 @@
-#compdef pulseaudio pactl pacmd pacat paplay parecord padsp pasuspender
+#compdef pulseaudio pactl pacmd pacat paplay parec parecord padsp pasuspender
 
 _devices() {
     local -a _device_list
@@ -23,19 +23,36 @@ _devices() {
             move-source-output) cmd=('sources');;
         esac
 
-    elif [[ $service == (pacat|paplay|parecord) ]]; then
-        if [[ $words == *-r[[:space:]]* ]]; then
-            cmd=('sources')
-        elif [[ $words == *-p[[:space:]]* ]]; then
-            cmd=('sinks')
-        else
-            cmd=('sinks' 'sources')
-        fi
+    elif [[ $service == (pacat|paplay|parec|parecord) ]]; then
+        case $words[$((CURRENT))] in
+            --device=*)
+                if [[ $words == *(--playback|-p)[[:space:]]* ||
+                    $service == paplay ]]; then
+                    cmd=('sinks')
+                elif [[ $words == *(--record|-r)[[:space:]]* ||
+                    $service == (parec|parecord) ]]; then
+                    cmd=('sources')
+                else
+                    cmd=('sinks' 'sources')
+                fi
+                ;;
+            --monitor-stream=*) cmd=('sink-inputs');;
+        esac
 
-    elif [[ $service == paplay ]]; then
-        cmd=('sinks')
-    elif [[ $service == parecord ]]; then
-        cmd=('sources')
+        case $words[$((CURRENT - 1))] in
+            -d)
+                if [[ $words == *(--playback|-p)[[:space:]]* ||
+                    $service == paplay ]]; then
+                    cmd=('sinks')
+                elif [[ $words == *(--record|-r)[[:space:]]* ||
+                    $service == (parec|parecord) ]]; then
+                    cmd=('sources')
+                else
+                    cmd=('sinks' 'sources')
+                fi
+                ;;
+        esac
+
     fi
 
     for (( i = 0; i < ${#words[@]}; i++ )) do
@@ -257,8 +274,8 @@ _pactl_completion() {
             'suspend-sink: suspend or resume a sink'
             'suspend-source: suspend or resume a source'
             'set-card-profile: set a card profile:cards:_cards'
-            'set-sink-default: set the default sink'
-            'set-source-default: set the default source'
+            'set-default-sink: set the default sink'
+            'set-default-source: set the default source'
             'set-sink-port: set the sink port of a sink'
             'set-source-port: set the source port of a source'
             'set-port-latency-offset: set a latency offset on a port'
@@ -329,6 +346,7 @@ _pacmd_completion() {
         _pacmd_commands=(
             'help: show help and exit'
             'list-modules: list modules'
+            'list-cards: list cards'
             'list-sinks: list sinks'
             'list-sources: list sources'
             'list-clients: list clients'
@@ -451,6 +469,7 @@ _pacat_completion() {
         {-p,--playback}'[create a connection for playback]' \
         {-s,--server=}'[name of server to connect to]:host:_hosts' \
         {-d,--device=}'[name of sink/source to connect to]:device:_devices' \
+        '--monitor-stream=[index of the sink input to record from]:device:_devices' \
         {-n,--client-name=}'[client name to use]:name' \
         '--stream-name=[how to call this stream]:name' \
         '--volume=[initial volume to use]:volume' \
@@ -522,6 +541,7 @@ _pulseaudio() {
         pacmd) _pacmd_completion;;
         pacat) _pacat_completion;;
         paplay)_pacat_completion;;
+        parec) _pacat_completion;;
         parecord)_pacat_completion;;
         padsp) _padsp_completion;;
         pasuspender) _pasuspender_completion;;

@@ -93,6 +93,15 @@ static int add_key_value(pa_modargs *ma, char *key, char *value, const char* con
     return 0;
 }
 
+static void free_func(void *p) {
+    struct entry *e = p;
+    pa_assert(e);
+
+    pa_xfree(e->key);
+    pa_xfree(e->value);
+    pa_xfree(e);
+}
+
 pa_modargs *pa_modargs_new(const char *args, const char* const* valid_keys) {
     enum {
         WHITESPACE,
@@ -110,8 +119,8 @@ pa_modargs *pa_modargs_new(const char *args, const char* const* valid_keys) {
     size_t key_len = 0, value_len = 0;
     pa_modargs *ma = pa_xnew(pa_modargs, 1);
 
-    ma->raw = pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func);
-    ma->unescaped = pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func);
+    ma->raw = pa_hashmap_new_full(pa_idxset_string_hash_func, pa_idxset_string_compare_func, NULL, free_func);
+    ma->unescaped = pa_hashmap_new_full(pa_idxset_string_hash_func, pa_idxset_string_compare_func, NULL, free_func);
 
     if (!args)
         return ma;
@@ -247,20 +256,11 @@ fail:
     return NULL;
 }
 
-static void free_func(void *p) {
-    struct entry *e = p;
-    pa_assert(e);
-
-    pa_xfree(e->key);
-    pa_xfree(e->value);
-    pa_xfree(e);
-}
-
 void pa_modargs_free(pa_modargs*ma) {
     pa_assert(ma);
 
-    pa_hashmap_free(ma->raw, free_func);
-    pa_hashmap_free(ma->unescaped, free_func);
+    pa_hashmap_free(ma->raw);
+    pa_hashmap_free(ma->unescaped);
     pa_xfree(ma);
 }
 
@@ -317,7 +317,7 @@ int pa_modargs_get_value_s32(pa_modargs *ma, const char *key, int32_t *value) {
     return 0;
 }
 
-int pa_modargs_get_value_boolean(pa_modargs *ma, const char *key, pa_bool_t *value) {
+int pa_modargs_get_value_boolean(pa_modargs *ma, const char *key, bool *value) {
     const char *v;
     int r;
 
@@ -364,6 +364,21 @@ int pa_modargs_get_value_volume(pa_modargs *ma, const char *key, pa_volume_t *va
     return 0;
 }
 
+int pa_modargs_get_sample_rate(pa_modargs *ma, uint32_t *rate) {
+    uint32_t rate_local;
+
+    pa_assert(rate);
+
+    rate_local = *rate;
+    if ((pa_modargs_get_value_u32(ma, "rate", &rate_local)) < 0 ||
+        !pa_sample_rate_valid(rate_local))
+        return -1;
+
+    *rate = rate_local;
+
+    return 0;
+}
+
 int pa_modargs_get_sample_spec(pa_modargs *ma, pa_sample_spec *rss) {
     const char *format;
     uint32_t channels;
@@ -372,15 +387,12 @@ int pa_modargs_get_sample_spec(pa_modargs *ma, pa_sample_spec *rss) {
     pa_assert(rss);
 
     ss = *rss;
-    if ((pa_modargs_get_value_u32(ma, "rate", &ss.rate)) < 0 ||
-        ss.rate <= 0 ||
-        ss.rate > PA_RATE_MAX)
+    if ((pa_modargs_get_sample_rate(ma, &ss.rate)) < 0)
         return -1;
 
     channels = ss.channels;
     if ((pa_modargs_get_value_u32(ma, "channels", &channels)) < 0 ||
-        channels <= 0 ||
-        channels >= PA_CHANNELS_MAX)
+        !pa_channels_valid(channels))
         return -1;
     ss.channels = (uint8_t) channels;
 
@@ -397,14 +409,16 @@ int pa_modargs_get_sample_spec(pa_modargs *ma, pa_sample_spec *rss) {
 }
 
 int pa_modargs_get_alternate_sample_rate(pa_modargs *ma, uint32_t *alternate_rate) {
-    pa_assert(ma);
+    uint32_t rate_local;
+
     pa_assert(alternate_rate);
 
-    if ((pa_modargs_get_value_u32(ma, "alternate_rate", alternate_rate)) < 0 ||
-        *alternate_rate <= 0 ||
-        *alternate_rate > PA_RATE_MAX ||
-        !((*alternate_rate % 4000 == 0) || (*alternate_rate % 11025 == 0)))
+    rate_local = *alternate_rate;
+    if ((pa_modargs_get_value_u32(ma, "alternate_rate", &rate_local)) < 0 ||
+        !pa_sample_rate_valid(*alternate_rate))
         return -1;
+
+    *alternate_rate = rate_local;
 
     return 0;
 }
@@ -425,6 +439,24 @@ int pa_modargs_get_channel_map(pa_modargs *ma, const char *name, pa_channel_map 
         return -1;
 
     *rmap = map;
+    return 0;
+}
+
+int pa_modargs_get_resample_method(pa_modargs *ma, pa_resample_method_t *rmethod) {
+    const char *m;
+
+    pa_assert(ma);
+    pa_assert(rmethod);
+
+    if ((m = pa_modargs_get_value(ma, "resample_method", NULL))) {
+        pa_resample_method_t method = pa_parse_resample_method(m);
+
+        if (method == PA_RESAMPLER_INVALID)
+            return -1;
+
+        *rmethod = method;
+    }
+
     return 0;
 }
 

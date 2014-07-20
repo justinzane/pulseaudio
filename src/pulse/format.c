@@ -30,6 +30,7 @@
 #include <pulse/internal.h>
 #include <pulse/xmalloc.h>
 
+#include <pulsecore/core-format.h>
 #include <pulsecore/core-util.h>
 #include <pulsecore/i18n.h>
 #include <pulsecore/macro.h>
@@ -170,7 +171,7 @@ error:
     goto out;
 }
 
-int pa_format_info_is_compatible(pa_format_info *first, pa_format_info *second) {
+int pa_format_info_is_compatible(const pa_format_info *first, const pa_format_info *second) {
     const char *key;
     void *state = NULL;
 
@@ -178,7 +179,7 @@ int pa_format_info_is_compatible(pa_format_info *first, pa_format_info *second) 
     pa_assert(second);
 
     if (first->encoding != second->encoding)
-        return FALSE;
+        return false;
 
     while ((key = pa_proplist_iterate(first->plist, &state))) {
         const char *value_one, *value_two;
@@ -187,13 +188,13 @@ int pa_format_info_is_compatible(pa_format_info *first, pa_format_info *second) 
         value_two = pa_proplist_gets(second->plist, key);
 
         if (!value_two || !pa_format_info_prop_compatible(value_one, value_two))
-            return FALSE;
+            return false;
     }
 
-    return TRUE;
+    return true;
 }
 
-pa_format_info* pa_format_info_from_sample_spec(pa_sample_spec *ss, pa_channel_map *map) {
+pa_format_info* pa_format_info_from_sample_spec(const pa_sample_spec *ss, const pa_channel_map *map) {
     char cm[PA_CHANNEL_MAP_SNPRINT_MAX];
     pa_format_info *f;
 
@@ -215,73 +216,27 @@ pa_format_info* pa_format_info_from_sample_spec(pa_sample_spec *ss, pa_channel_m
     return f;
 }
 
-/* For compressed streams */
-static int pa_format_info_to_sample_spec_fake(pa_format_info *f, pa_sample_spec *ss) {
-    int rate;
-
-    pa_assert(f);
-    pa_assert(ss);
-
-    /* Note: When we add support for non-IEC61937 encapsulated compressed
-     * formats, this function should return a non-zero values for these. */
-
-    ss->format = PA_SAMPLE_S16LE;
-    ss->channels = 2;
-
-    pa_return_val_if_fail(pa_format_info_get_prop_int(f, PA_PROP_FORMAT_RATE, &rate) == 0, -PA_ERR_INVALID);
-    ss->rate = (uint32_t) rate;
-
-    if (f->encoding == PA_ENCODING_EAC3_IEC61937)
-        ss->rate *= 4;
-
-    return 0;
-}
-
 /* For PCM streams */
-int pa_format_info_to_sample_spec(pa_format_info *f, pa_sample_spec *ss, pa_channel_map *map) {
-    char *sf = NULL, *m = NULL;
-    int rate, channels;
-    int ret = -PA_ERR_INVALID;
-
+int pa_format_info_to_sample_spec(const pa_format_info *f, pa_sample_spec *ss, pa_channel_map *map) {
     pa_assert(f);
     pa_assert(ss);
 
     if (!pa_format_info_is_pcm(f))
-        return pa_format_info_to_sample_spec_fake(f, ss);
+        return pa_format_info_to_sample_spec_fake(f, ss, map);
 
-    if (pa_format_info_get_prop_string(f, PA_PROP_FORMAT_SAMPLE_FORMAT, &sf))
-        goto out;
-    if (pa_format_info_get_prop_int(f, PA_PROP_FORMAT_RATE, &rate))
-        goto out;
-    if (pa_format_info_get_prop_int(f, PA_PROP_FORMAT_CHANNELS, &channels))
-        goto out;
+    if (pa_format_info_get_sample_format(f, &ss->format) < 0)
+        return -PA_ERR_INVALID;
+    if (pa_format_info_get_rate(f, &ss->rate) < 0)
+        return -PA_ERR_INVALID;
+    if (pa_format_info_get_channels(f, &ss->channels) < 0)
+        return -PA_ERR_INVALID;
+    if (map && pa_format_info_get_channel_map(f, map) < 0)
+        return -PA_ERR_INVALID;
 
-    if ((ss->format = pa_parse_sample_format(sf)) == PA_SAMPLE_INVALID)
-        goto out;
-
-    ss->rate = (uint32_t) rate;
-    ss->channels = (uint8_t) channels;
-
-    if (map) {
-        pa_channel_map_init(map);
-
-        if (pa_format_info_get_prop_string(f, PA_PROP_FORMAT_CHANNEL_MAP, &m) == 0)
-            if (pa_channel_map_parse(map, m) == NULL)
-                goto out;
-    }
-
-    ret = 0;
-
-out:
-    if (sf)
-        pa_xfree(sf);
-    if (m)
-        pa_xfree(m);
-
-    return ret;
+    return 0;
 }
 
-pa_prop_type_t pa_format_info_get_prop_type(pa_format_info *f, const char *key) {
+pa_prop_type_t pa_format_info_get_prop_type(const pa_format_info *f, const char *key) {
     const char *str;
     json_object *o, *o1;
     pa_prop_type_t type;
@@ -355,7 +310,7 @@ pa_prop_type_t pa_format_info_get_prop_type(pa_format_info *f, const char *key) 
     return type;
 }
 
-int pa_format_info_get_prop_int(pa_format_info *f, const char *key, int *v) {
+int pa_format_info_get_prop_int(const pa_format_info *f, const char *key, int *v) {
     const char *str;
     json_object *o;
 
@@ -368,10 +323,13 @@ int pa_format_info_get_prop_int(pa_format_info *f, const char *key, int *v) {
         return -PA_ERR_NOENTITY;
 
     o = json_tokener_parse(str);
-    if (is_error(o))
+    if (is_error(o)) {
+        pa_log_debug("Failed to parse format info property '%s'.", key);
         return -PA_ERR_INVALID;
+    }
 
     if (json_object_get_type(o) != json_type_int) {
+        pa_log_debug("Format info property '%s' type is not int.", key);
         json_object_put(o);
         return -PA_ERR_INVALID;
     }
@@ -382,7 +340,7 @@ int pa_format_info_get_prop_int(pa_format_info *f, const char *key, int *v) {
     return 0;
 }
 
-int pa_format_info_get_prop_int_range(pa_format_info *f, const char *key, int *min, int *max) {
+int pa_format_info_get_prop_int_range(const pa_format_info *f, const char *key, int *min, int *max) {
     const char *str;
     json_object *o, *o1;
     int ret = -PA_ERR_INVALID;
@@ -397,8 +355,10 @@ int pa_format_info_get_prop_int_range(pa_format_info *f, const char *key, int *m
         return -PA_ERR_NOENTITY;
 
     o = json_tokener_parse(str);
-    if (is_error(o))
+    if (is_error(o)) {
+        pa_log_debug("Failed to parse format info property '%s'.", key);
         return -PA_ERR_INVALID;
+    }
 
     if (json_object_get_type(o) != json_type_object)
         goto out;
@@ -418,12 +378,14 @@ int pa_format_info_get_prop_int_range(pa_format_info *f, const char *key, int *m
     ret = 0;
 
 out:
+    if (ret < 0)
+        pa_log_debug("Format info property '%s' is not a valid int range.", key);
+
     json_object_put(o);
     return ret;
 }
 
-int pa_format_info_get_prop_int_array(pa_format_info *f, const char *key, int **values, int *n_values)
-{
+int pa_format_info_get_prop_int_array(const pa_format_info *f, const char *key, int **values, int *n_values) {
     const char *str;
     json_object *o, *o1;
     int i, ret = -PA_ERR_INVALID;
@@ -438,8 +400,10 @@ int pa_format_info_get_prop_int_array(pa_format_info *f, const char *key, int **
         return -PA_ERR_NOENTITY;
 
     o = json_tokener_parse(str);
-    if (is_error(o))
+    if (is_error(o)) {
+        pa_log_debug("Failed to parse format info property '%s'.", key);
         return -PA_ERR_INVALID;
+    }
 
     if (json_object_get_type(o) != json_type_array)
         goto out;
@@ -462,11 +426,14 @@ int pa_format_info_get_prop_int_array(pa_format_info *f, const char *key, int **
     ret = 0;
 
 out:
+    if (ret < 0)
+        pa_log_debug("Format info property '%s' is not a valid int array.", key);
+
     json_object_put(o);
     return ret;
 }
 
-int pa_format_info_get_prop_string(pa_format_info *f, const char *key, char **v) {
+int pa_format_info_get_prop_string(const pa_format_info *f, const char *key, char **v) {
     const char *str = NULL;
     json_object *o;
 
@@ -479,10 +446,13 @@ int pa_format_info_get_prop_string(pa_format_info *f, const char *key, char **v)
         return -PA_ERR_NOENTITY;
 
     o = json_tokener_parse(str);
-    if (is_error(o))
+    if (is_error(o)) {
+        pa_log_debug("Failed to parse format info property '%s'.", key);
         return -PA_ERR_INVALID;
+    }
 
     if (json_object_get_type(o) != json_type_string) {
+        pa_log_debug("Format info property '%s' type is not string.", key);
         json_object_put(o);
         return -PA_ERR_INVALID;
     }
@@ -493,8 +463,7 @@ int pa_format_info_get_prop_string(pa_format_info *f, const char *key, char **v)
     return 0;
 }
 
-int pa_format_info_get_prop_string_array(pa_format_info *f, const char *key, char ***values, int *n_values)
-{
+int pa_format_info_get_prop_string_array(const pa_format_info *f, const char *key, char ***values, int *n_values) {
     const char *str;
     json_object *o, *o1;
     int i, ret = -PA_ERR_INVALID;
@@ -509,8 +478,10 @@ int pa_format_info_get_prop_string_array(pa_format_info *f, const char *key, cha
         return -PA_ERR_NOENTITY;
 
     o = json_tokener_parse(str);
-    if (is_error(o))
+    if (is_error(o)) {
+        pa_log_debug("Failed to parse format info property '%s'.", key);
         return -PA_ERR_INVALID;
+    }
 
     if (json_object_get_type(o) != json_type_array)
         goto out;
@@ -533,6 +504,9 @@ int pa_format_info_get_prop_string_array(pa_format_info *f, const char *key, cha
     ret = 0;
 
 out:
+    if (ret < 0)
+        pa_log_debug("Format info property '%s' is not a valid string array.", key);
+
     json_object_put(o);
     return ret;
 }
@@ -642,15 +616,14 @@ void pa_format_info_set_prop_string_array(pa_format_info *f, const char *key, co
     json_object_put(o);
 }
 
-static pa_bool_t pa_json_is_fixed_type(json_object *o)
-{
+static bool pa_json_is_fixed_type(json_object *o) {
     switch(json_object_get_type(o)) {
         case json_type_object:
         case json_type_array:
-            return FALSE;
+            return false;
 
         default:
-            return TRUE;
+            return true;
     }
 }
 
@@ -672,7 +645,7 @@ static int pa_format_info_prop_compatible(const char *one, const char *two) {
         goto out;
 
     /* We don't deal with both values being non-fixed - just because there is no immediate need (FIXME) */
-    pa_return_val_if_fail(pa_json_is_fixed_type(o1) || pa_json_is_fixed_type(o2), FALSE);
+    pa_return_val_if_fail(pa_json_is_fixed_type(o1) || pa_json_is_fixed_type(o2), false);
 
     if (pa_json_is_fixed_type(o1) && pa_json_is_fixed_type(o2)) {
         ret = pa_json_value_equal(o1, o2);

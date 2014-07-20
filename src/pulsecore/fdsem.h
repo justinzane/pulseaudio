@@ -28,6 +28,8 @@
  * the best case all functions are lock-free unless sleeping is
  * required.  */
 
+#include <pulsecore/atomic.h>
+
 typedef struct pa_fdsem pa_fdsem;
 
 typedef struct pa_fdsem_data {
@@ -38,7 +40,7 @@ typedef struct pa_fdsem_data {
 
 pa_fdsem *pa_fdsem_new(void);
 pa_fdsem *pa_fdsem_open_shm(pa_fdsem_data *data, int event_fd);
-pa_fdsem *pa_fdsem_new_shm(pa_fdsem_data *data, int* event_fd);
+pa_fdsem *pa_fdsem_new_shm(pa_fdsem_data *data);
 void pa_fdsem_free(pa_fdsem *f);
 
 void pa_fdsem_post(pa_fdsem *f);
@@ -49,6 +51,5 @@ int pa_fdsem_get(pa_fdsem *f);
 
 int pa_fdsem_before_poll(pa_fdsem *f);
 int pa_fdsem_after_poll(pa_fdsem *f);
-
 
 #endif

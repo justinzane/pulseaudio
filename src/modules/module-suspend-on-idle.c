@@ -39,7 +39,7 @@
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("When a sink/source is idle for too long, suspend it");
 PA_MODULE_VERSION(PACKAGE_VERSION);
-PA_MODULE_LOAD_ONCE(TRUE);
+PA_MODULE_LOAD_ONCE(true);
 PA_MODULE_USAGE("timeout=<timeout>");
 
 static const char* const valid_modargs[] = {
@@ -78,6 +78,7 @@ struct device_info {
     pa_source *source;
     pa_usec_t last_use;
     pa_time_event *time_event;
+    pa_usec_t timeout;
 };
 
 static void timeout_cb(pa_mainloop_api*a, pa_time_event* e, const struct timeval *t, void *userdata) {
@@ -89,37 +90,30 @@ static void timeout_cb(pa_mainloop_api*a, pa_time_event* e, const struct timeval
 
     if (d->sink && pa_sink_check_suspend(d->sink) <= 0 && !(d->sink->suspend_cause & PA_SUSPEND_IDLE)) {
         pa_log_info("Sink %s idle for too long, suspending ...", d->sink->name);
-        pa_sink_suspend(d->sink, TRUE, PA_SUSPEND_IDLE);
+        pa_sink_suspend(d->sink, true, PA_SUSPEND_IDLE);
         pa_core_maybe_vacuum(d->userdata->core);
     }
 
     if (d->source && pa_source_check_suspend(d->source) <= 0 && !(d->source->suspend_cause & PA_SUSPEND_IDLE)) {
         pa_log_info("Source %s idle for too long, suspending ...", d->source->name);
-        pa_source_suspend(d->source, TRUE, PA_SUSPEND_IDLE);
+        pa_source_suspend(d->source, true, PA_SUSPEND_IDLE);
         pa_core_maybe_vacuum(d->userdata->core);
     }
 }
 
 static void restart(struct device_info *d) {
     pa_usec_t now;
-    const char *s;
-    uint32_t timeout;
 
     pa_assert(d);
     pa_assert(d->sink || d->source);
 
     d->last_use = now = pa_rtclock_now();
-
-    s = pa_proplist_gets(d->sink ? d->sink->proplist : d->source->proplist, "module-suspend-on-idle.timeout");
-    if (!s || pa_atou(s, &timeout) < 0)
-        timeout = d->userdata->timeout;
-
-    pa_core_rttime_restart(d->userdata->core, d->time_event, now + timeout * PA_USEC_PER_SEC);
+    pa_core_rttime_restart(d->userdata->core, d->time_event, now + d->timeout);
 
     if (d->sink)
-        pa_log_debug("Sink %s becomes idle, timeout in %u seconds.", d->sink->name, timeout);
+        pa_log_debug("Sink %s becomes idle, timeout in %" PRIu64 " seconds.", d->sink->name, d->timeout / PA_USEC_PER_SEC);
     if (d->source)
-        pa_log_debug("Source %s becomes idle, timeout in %u seconds.", d->source->name, timeout);
+        pa_log_debug("Source %s becomes idle, timeout in %" PRIu64 " seconds.", d->source->name, d->timeout / PA_USEC_PER_SEC);
 }
 
 static void resume(struct device_info *d) {
@@ -129,12 +123,12 @@ static void resume(struct device_info *d) {
 
     if (d->sink) {
         pa_log_debug("Sink %s becomes busy, resuming.", d->sink->name);
-        pa_sink_suspend(d->sink, FALSE, PA_SUSPEND_IDLE);
+        pa_sink_suspend(d->sink, false, PA_SUSPEND_IDLE);
     }
 
     if (d->source) {
         pa_log_debug("Source %s becomes busy, resuming.", d->source->name);
-        pa_source_suspend(d->source, FALSE, PA_SUSPEND_IDLE);
+        pa_source_suspend(d->source, false, PA_SUSPEND_IDLE);
     }
 }
 
@@ -147,10 +141,14 @@ static pa_hook_result_t sink_input_fixate_hook_cb(pa_core *c, pa_sink_input_new_
 
     /* We need to resume the audio device here even for
      * PA_SINK_INPUT_START_CORKED, since we need the device parameters
-     * to be fully available while the stream is set up. */
+     * to be fully available while the stream is set up. In that case,
+     * make sure we close the sink again after the timeout interval. */
 
-    if ((d = pa_hashmap_get(u->device_infos, data->sink)))
+    if ((d = pa_hashmap_get(u->device_infos, data->sink))) {
         resume(d);
+        if (pa_sink_check_suspend(d->sink) <= 0)
+            restart(d);
+    }
 
     return PA_HOOK_OK;
 }
@@ -167,8 +165,18 @@ static pa_hook_result_t source_output_fixate_hook_cb(pa_core *c, pa_source_outpu
     else
         d = pa_hashmap_get(u->device_infos, data->source);
 
-    if (d)
+    if (d) {
         resume(d);
+        if (d->source) {
+            if (pa_source_check_suspend(d->source) <= 0)
+                restart(d);
+        } else {
+            /* The source output is connected to a monitor source. */
+            pa_assert(d->sink);
+            if (pa_sink_check_suspend(d->sink) <= 0)
+                restart(d);
+        }
+    }
 
     return PA_HOOK_OK;
 }
@@ -328,6 +336,9 @@ static pa_hook_result_t device_new_hook_cb(pa_core *c, pa_object *o, struct user
     struct device_info *d;
     pa_source *source;
     pa_sink *sink;
+    const char *timeout_str;
+    int32_t timeout;
+    bool timeout_valid;
 
     pa_assert(c);
     pa_object_assert_ref(o);
@@ -342,11 +353,26 @@ static pa_hook_result_t device_new_hook_cb(pa_core *c, pa_object *o, struct user
 
     pa_assert(source || sink);
 
+    timeout_str = pa_proplist_gets(sink ? sink->proplist : source->proplist, "module-suspend-on-idle.timeout");
+    if (timeout_str && pa_atoi(timeout_str, &timeout) >= 0)
+        timeout_valid = true;
+    else
+        timeout_valid = false;
+
+    if (timeout_valid && timeout < 0)
+        return PA_HOOK_OK;
+
     d = pa_xnew(struct device_info, 1);
     d->userdata = u;
     d->source = source ? pa_source_ref(source) : NULL;
     d->sink = sink ? pa_sink_ref(sink) : NULL;
     d->time_event = pa_core_rttime_new(c, PA_USEC_INVALID, timeout_cb, d);
+
+    if (timeout_valid)
+        d->timeout = timeout * PA_USEC_PER_SEC;
+    else
+        d->timeout = d->userdata->timeout;
+
     pa_hashmap_put(u->device_infos, o, d);
 
     if ((d->sink && pa_sink_check_suspend(d->sink) <= 0) ||
@@ -370,14 +396,11 @@ static void device_info_free(struct device_info *d) {
 }
 
 static pa_hook_result_t device_unlink_hook_cb(pa_core *c, pa_object *o, struct userdata *u) {
-    struct device_info *d;
-
     pa_assert(c);
     pa_object_assert_ref(o);
     pa_assert(u);
 
-    if ((d = pa_hashmap_remove(u->device_infos, o)))
-        device_info_free(d);
+    pa_hashmap_remove_and_free(u->device_infos, o);
 
     return PA_HOOK_OK;
 }
@@ -434,8 +457,8 @@ int pa__init(pa_module*m) {
 
     m->userdata = u = pa_xnew(struct userdata, 1);
     u->core = m->core;
-    u->timeout = timeout;
-    u->device_infos = pa_hashmap_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
+    u->timeout = timeout * PA_USEC_PER_SEC;
+    u->device_infos = pa_hashmap_new_full(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func, NULL, (pa_free_cb_t) device_info_free);
 
     PA_IDXSET_FOREACH(sink, m->core->sinks, idx)
         device_new_hook_cb(m->core, PA_OBJECT(sink), u);
@@ -518,7 +541,7 @@ void pa__done(pa_module*m) {
     if (u->source_output_state_changed_slot)
         pa_hook_slot_free(u->source_output_state_changed_slot);
 
-    pa_hashmap_free(u->device_infos, (pa_free_cb_t) device_info_free);
+    pa_hashmap_free(u->device_infos);
 
     pa_xfree(u);
 }

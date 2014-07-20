@@ -120,7 +120,7 @@ PA_C_DECL_BEGIN
 #endif
 
 /* On Sparc, WORDS_BIGENDIAN needs to be set if _BIG_ENDIAN is defined. */
-#ifdef _BIG_ENDIAN
+#if defined(__sparc__) && defined(_BIG_ENDIAN)
 #define WORDS_BIGENDIAN
 #endif
 
@@ -288,6 +288,16 @@ size_t pa_usec_to_bytes(pa_usec_t t, const pa_sample_spec *spec) PA_GCC_PURE;
  * it. The sample spec will have a defined state but
  * pa_sample_spec_valid() will fail for it. \since 0.9.13 */
 pa_sample_spec* pa_sample_spec_init(pa_sample_spec *spec);
+
+/** Return non-zero if the given integer is a valid sample format. \since 5.0 */
+int pa_sample_format_valid(unsigned format) PA_GCC_PURE;
+
+/** Return non-zero if the rate is within the supported range. \since 5.0 */
+int pa_sample_rate_valid(uint32_t rate) PA_GCC_PURE;
+
+/** Return non-zero if the channel count is within the supported range.
+ * \since 5.0 */
+int pa_channels_valid(uint8_t channels) PA_GCC_PURE;
 
 /** Return non-zero when the sample type specification is valid */
 int pa_sample_spec_valid(const pa_sample_spec *spec) PA_GCC_PURE;

@@ -52,9 +52,14 @@
  * \section create_sec Creating
  *
  * To access a stream, a pa_stream object must be created using
- * pa_stream_new(). At this point the audio sample format and mapping of
- * channels must be specified. See \ref sample and \ref channelmap for more
- * information about those structures.
+ * pa_stream_new() or pa_stream_new_extended(). pa_stream_new() is for PCM
+ * streams only, while pa_stream_new_extended() can be used for both PCM and
+ * compressed audio streams. At this point the application must specify what
+ * stream format(s) it supports. See \ref sample and \ref channelmap for more
+ * information on the stream format parameters. FIXME: Those references only
+ * talk about PCM parameters, we should also have an overview page for how the
+ * pa_format_info based stream format configuration works. Bug filed:
+ * https://bugs.freedesktop.org/show_bug.cgi?id=72265
  *
  * This first step will only create a client-side object, representing the
  * stream. To use the stream, a server-side object must be created and
@@ -70,6 +75,16 @@
  * should register a state change callback, using
  * pa_stream_set_state_callback(), and wait for the stream to enter an active
  * state.
+ *
+ * Note: there is a user-controllable slider in mixer applications such as
+ * pavucontrol corresponding to each of the created streams. Multiple
+ * (especially identically named) volume sliders for the same application might
+ * confuse the user. Also, the server supports only a limited number of
+ * simultaneous streams. Because of this, it is not always appropriate to
+ * create multiple streams in one application that needs to output multiple
+ * sounds. The rough guideline is: if there is no use case that would require
+ * separate user-initiated volume changes for each stream, perform the mixing
+ * inside the application.
  *
  * \subsection bufattr_subsec Buffer Attributes
  *
@@ -112,7 +127,7 @@
  *              (which is recommended) the server will choose the same
  *              value as tlength here.
  *
- * \li minreq - Minimum free number of the bytes in the playback
+ * \li minreq - Minimum number of free bytes in the playback
  *              buffer before the server will request more data. It is
  *              recommended to fill in (uint32_t) -1 here. This value
  *              influences how much time the sound server has to move
@@ -139,13 +154,13 @@
  * PA_STREAM_ADJUST_LATENCY if you want to control the overall
  * playback latency for your stream. Unset it if you want to control
  * only the latency induced by the server-side, rewritable playback
- * buffer. The server will try to fulfill the clients latency requests
+ * buffer. The server will try to fulfill the client's latency requests
  * as good as possible. However if the underlying hardware cannot
  * change the hardware buffer length or only in a limited range, the
  * actually resulting latency might be different from what the client
  * requested. Thus, for synchronization clients always need to check
  * the actual measured latency via pa_stream_get_latency() or a
- * similar call, and not make any assumptions. about the latency
+ * similar call, and not make any assumptions about the latency
  * available. The function pa_stream_get_buffer_attr() will always
  * return the actual size of the server-side per-stream buffer in
  * tlength/fragsize, regardless whether PA_STREAM_ADJUST_LATENCY is
@@ -200,7 +215,7 @@
  * \li pa_stream_drain() - Wait for the playback buffer to go empty. Will
  *                         return a pa_operation object that will indicate when
  *                         the buffer is completely drained.
- * \li pa_stream_flush() - Drop all data from the playback buffer and do not
+ * \li pa_stream_flush() - Drop all data from the playback or record buffer. Do not
  *                         wait for it to finish playing.
  *
  * \section seek_modes Seeking in the Playback Buffer
@@ -419,7 +434,7 @@ int pa_stream_is_suspended(pa_stream *s);
 int pa_stream_is_corked(pa_stream *s);
 
 /** Connect the stream to a sink. It is strongly recommended to pass
- * NULL in both \a dev and \a volume and not to set either
+ * NULL in both \a dev and \a volume and to set neither
  * PA_STREAM_START_MUTED nor PA_STREAM_START_UNMUTED -- unless these
  * options are directly dependent on user input or configuration.
  *
@@ -435,7 +450,13 @@ int pa_stream_is_corked(pa_stream *s);
  * an absolute device volume. Since 0.9.20 it is an absolute volume when
  * the sink is in flat volume mode, and relative otherwise, thus
  * making sure the volume passed here has always the same semantics as
- * the volume passed to pa_context_set_sink_input_volume(). */
+ * the volume passed to pa_context_set_sink_input_volume(). It is possible
+ * to figure out whether flat volume mode is in effect for a given sink
+ * by calling pa_context_get_sink_info_by_name().
+ *
+ * Since 5.0, it's possible to specify a single-channel volume even if the
+ * stream has multiple channels. In that case the same volume is applied to all
+ * channels. */
 int pa_stream_connect_playback(
         pa_stream *s                  /**< The stream to connect to a sink */,
         const char *dev               /**< Name of the sink to connect to, or NULL for default */ ,
@@ -607,7 +628,7 @@ void pa_stream_set_started_callback(pa_stream *p, pa_stream_notify_cb_t cb, void
 
 /** Set the callback function that is called whenever a latency
  * information update happens. Useful on PA_STREAM_AUTO_TIMING_UPDATE
- * streams only. (Only for playback streams) */
+ * streams only. */
 void pa_stream_set_latency_update_callback(pa_stream *p, pa_stream_notify_cb_t cb, void *userdata);
 
 /** Set the callback function that is called whenever the stream is
@@ -650,10 +671,9 @@ void pa_stream_set_buffer_attr_callback(pa_stream *p, pa_stream_notify_cb_t cb, 
  * the stream, it will be created in corked state. */
 pa_operation* pa_stream_cork(pa_stream *s, int b, pa_stream_success_cb_t cb, void *userdata);
 
-/** Flush the playback buffer of this stream. This discards any audio data
+/** Flush the playback or record buffer of this stream. This discards any audio data
  * in the buffer.  Most of the time you're better off using the parameter
- * delta of pa_stream_write() instead of this function. Available on both
- * playback and recording streams. */
+ * \a seek of pa_stream_write() instead of this function. */
 pa_operation* pa_stream_flush(pa_stream *s, pa_stream_success_cb_t cb, void *userdata);
 
 /** Reenable prebuffering if specified in the pa_buffer_attr

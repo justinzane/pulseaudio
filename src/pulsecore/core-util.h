@@ -35,6 +35,8 @@
 
 #include <pulse/gccmacro.h>
 #include <pulse/volume.h>
+
+#include <pulsecore/i18n.h>
 #include <pulsecore/macro.h>
 #include <pulsecore/socket.h>
 
@@ -57,10 +59,13 @@ struct timeval;
 #endif
 
 void pa_make_fd_nonblock(int fd);
+void pa_make_fd_block(int fd);
+bool pa_is_fd_nonblock(int fd);
+
 void pa_make_fd_cloexec(int fd);
 
-int pa_make_secure_dir(const char* dir, mode_t m, uid_t uid, gid_t gid, pa_bool_t update_perms);
-int pa_make_secure_parent_dir(const char *fn, mode_t, uid_t uid, gid_t gid, pa_bool_t update_perms);
+int pa_make_secure_dir(const char* dir, mode_t m, uid_t uid, gid_t gid, bool update_perms);
+int pa_make_secure_parent_dir(const char *fn, mode_t, uid_t uid, gid_t gid, bool update_perms);
 
 ssize_t pa_read(int fd, void *buf, size_t count, int *type);
 ssize_t pa_write(int fd, const void *buf, size_t count, int *type);
@@ -86,8 +91,8 @@ int pa_parse_boolean(const char *s) PA_GCC_PURE;
 
 int pa_parse_volume(const char *s, pa_volume_t *volume);
 
-static inline const char *pa_yes_no(pa_bool_t b) {
-    return b ? "yes" : "no";
+static inline const char *pa_yes_no(bool b) {
+    return b ? _("yes") : _("no");
 }
 
 static inline const char *pa_strnull(const char *x) {
@@ -124,8 +129,8 @@ int pa_unlock_lockfile(const char *fn, int fd);
 char *pa_hexstr(const uint8_t* d, size_t dlength, char *s, size_t slength);
 size_t pa_parsehex(const char *p, uint8_t *d, size_t dlength);
 
-pa_bool_t pa_startswith(const char *s, const char *pfx) PA_GCC_PURE;
-pa_bool_t pa_endswith(const char *s, const char *sfx) PA_GCC_PURE;
+bool pa_startswith(const char *s, const char *pfx) PA_GCC_PURE;
+bool pa_endswith(const char *s, const char *sfx) PA_GCC_PURE;
 
 FILE *pa_open_config_file(const char *global, const char *local, const char *env, char **result);
 char* pa_find_config_file(const char *global, const char *local, const char *env);
@@ -133,9 +138,12 @@ char* pa_find_config_file(const char *global, const char *local, const char *env
 char *pa_get_runtime_dir(void);
 char *pa_get_state_dir(void);
 char *pa_get_home_dir_malloc(void);
+int pa_append_to_home_dir(const char *path, char **_r);
+int pa_get_config_home_dir(char **_r);
+int pa_append_to_config_home_dir(const char *path, char **_r);
 char *pa_get_binary_name_malloc(void);
 char *pa_runtime_path(const char *fn);
-char *pa_state_path(const char *fn, pa_bool_t prepend_machine_id);
+char *pa_state_path(const char *fn, bool prepend_machine_id);
 
 int pa_atoi(const char *s, int32_t *ret_i);
 int pa_atou(const char *s, uint32_t *ret_u);
@@ -151,7 +159,7 @@ int pa_match(const char *expr, const char *v);
 
 char *pa_getcwd(void);
 char *pa_make_path_absolute(const char *p);
-pa_bool_t pa_is_path_absolute(const char *p);
+bool pa_is_path_absolute(const char *p);
 
 void *pa_will_need(const void *p, size_t l);
 
@@ -205,10 +213,18 @@ void pa_set_env(const char *key, const char *value);
 void pa_set_env_and_record(const char *key, const char *value);
 void pa_unset_env_recorded(void);
 
-pa_bool_t pa_in_system_mode(void);
+bool pa_in_system_mode(void);
 
 #define pa_streq(a,b) (!strcmp((a),(b)))
-pa_bool_t pa_str_in_list_spaces(const char *needle, const char *haystack);
+
+/* Like pa_streq, but does not blow up on NULL pointers. */
+static inline bool pa_safe_streq(const char *a, const char *b) {
+    if (a == NULL || b == NULL)
+        return a == b;
+    return pa_streq(a, b);
+}
+
+bool pa_str_in_list_spaces(const char *needle, const char *haystack);
 
 char *pa_get_host_name_malloc(void);
 char *pa_get_user_name_malloc(void);
@@ -218,10 +234,10 @@ char *pa_session_id(void);
 char *pa_uname_string(void);
 
 #ifdef HAVE_VALGRIND_MEMCHECK_H
-pa_bool_t pa_in_valgrind(void);
+bool pa_in_valgrind(void);
 #else
-static inline pa_bool_t pa_in_valgrind(void) {
-    return FALSE;
+static inline bool pa_in_valgrind(void) {
+    return false;
 }
 #endif
 
@@ -260,7 +276,7 @@ size_t pa_pipe_buf(int fd);
 
 void pa_reset_personality(void);
 
-pa_bool_t pa_run_from_build_tree(void) PA_GCC_CONST;
+bool pa_run_from_build_tree(void) PA_GCC_CONST;
 
 const char *pa_get_temp_dir(void);
 
@@ -273,7 +289,7 @@ FILE* pa_fopen_cloexec(const char *path, const char *mode);
 void pa_nullify_stdfds(void);
 
 char *pa_read_line_from_file(const char *fn);
-pa_bool_t pa_running_in_vm(void);
+bool pa_running_in_vm(void);
 
 #ifdef OS_IS_WIN32
 char *pa_win32_get_toplevel(HANDLE handle);

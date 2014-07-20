@@ -253,7 +253,7 @@ static void thread_func(void *userdata) {
 
     for (;;) {
         int ret;
-        pa_bool_t need_timer = FALSE;
+        bool need_timer = false;
 
         if (u->sink) {
             if (PA_UNLIKELY(u->sink->thread_info.rewind_requested))
@@ -261,13 +261,13 @@ static void thread_func(void *userdata) {
 
             if (PA_SINK_IS_OPENED(u->sink->thread_info.state)) {
                 do_write(u);
-                need_timer = TRUE;
+                need_timer = true;
             }
         }
 
         if (u->source && PA_SOURCE_IS_OPENED(u->source->thread_info.state)) {
             do_read(u);
-            need_timer = TRUE;
+            need_timer = true;
         }
 
         if (need_timer)
@@ -276,7 +276,7 @@ static void thread_func(void *userdata) {
             pa_rtpoll_set_timer_disabled(u->rtpoll);
 
         /* Hmm, nothing to do. Let's sleep */
-        if ((ret = pa_rtpoll_run(u->rtpoll, TRUE)) < 0)
+        if ((ret = pa_rtpoll_run(u->rtpoll, true)) < 0)
             goto fail;
 
         if (ret == 0)
@@ -499,7 +499,7 @@ int pa__init(pa_module *m) {
     WAVEOUTCAPS pwoc;
     MMRESULT result;
     int nfrags, frag_size;
-    pa_bool_t record = TRUE, playback = TRUE;
+    bool record = true, playback = true;
     unsigned int device;
     pa_sample_spec ss;
     pa_channel_map map;
@@ -608,7 +608,6 @@ int pa__init(pa_module *m) {
     InitializeCriticalSection(&u->crit);
 
     if (hwi != INVALID_HANDLE_VALUE) {
-        char *description = pa_sprintf_malloc("WaveIn on %s", device_name);
         pa_source_new_data data;
         pa_source_new_data_init(&data);
         data.driver = __FILE__;
@@ -616,19 +615,17 @@ int pa__init(pa_module *m) {
         pa_source_new_data_set_sample_spec(&data, &ss);
         pa_source_new_data_set_channel_map(&data, &map);
         pa_source_new_data_set_name(&data, pa_modargs_get_value(ma, "source_name", DEFAULT_SOURCE_NAME));
+        pa_proplist_setf(data.proplist, PA_PROP_DEVICE_DESCRIPTION, "WaveIn on %s", device_name);
         u->source = pa_source_new(m->core, &data, PA_SOURCE_HARDWARE|PA_SOURCE_LATENCY);
         pa_source_new_data_done(&data);
 
         pa_assert(u->source);
         u->source->userdata = u;
-        pa_source_set_description(u->source, description);
         u->source->parent.process_msg = process_msg;
-        pa_xfree(description);
     } else
         u->source = NULL;
 
     if (hwo != INVALID_HANDLE_VALUE) {
-        char *description = pa_sprintf_malloc("WaveOut on %s", device_name);
         pa_sink_new_data data;
         pa_sink_new_data_init(&data);
         data.driver = __FILE__;
@@ -636,6 +633,7 @@ int pa__init(pa_module *m) {
         pa_sink_new_data_set_sample_spec(&data, &ss);
         pa_sink_new_data_set_channel_map(&data, &map);
         pa_sink_new_data_set_name(&data, pa_modargs_get_value(ma, "sink_name", DEFAULT_SINK_NAME));
+        pa_proplist_setf(data.proplist, PA_PROP_DEVICE_DESCRIPTION, "WaveOut on %s", device_name);
         u->sink = pa_sink_new(m->core, &data, PA_SINK_HARDWARE|PA_SINK_LATENCY);
         pa_sink_new_data_done(&data);
 
@@ -643,9 +641,7 @@ int pa__init(pa_module *m) {
         pa_sink_set_get_volume_callback(u->sink, sink_get_volume_cb);
         pa_sink_set_set_volume_callback(u->sink, sink_set_volume_cb);
         u->sink->userdata = u;
-        pa_sink_set_description(u->sink, description);
         u->sink->parent.process_msg = process_msg;
-        pa_xfree(description);
     } else
         u->sink = NULL;
 

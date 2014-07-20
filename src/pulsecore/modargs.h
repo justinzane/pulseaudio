@@ -28,6 +28,7 @@
 #include <pulse/proplist.h>
 #include <pulse/volume.h>
 #include <pulsecore/macro.h>
+#include <pulsecore/resampler.h>
 
 typedef struct pa_modargs pa_modargs;
 
@@ -44,7 +45,7 @@ const char *pa_modargs_get_value(pa_modargs *ma, const char *key, const char *de
 /* Return a module argument as unsigned 32bit value in *value */
 int pa_modargs_get_value_u32(pa_modargs *ma, const char *key, uint32_t *value);
 int pa_modargs_get_value_s32(pa_modargs *ma, const char *key, int32_t *value);
-int pa_modargs_get_value_boolean(pa_modargs *ma, const char *key, pa_bool_t *value);
+int pa_modargs_get_value_boolean(pa_modargs *ma, const char *key, bool *value);
 
 /* Return a module argument as double value in *value */
 int pa_modargs_get_value_double(pa_modargs *ma, const char *key, double *value);
@@ -52,11 +53,17 @@ int pa_modargs_get_value_double(pa_modargs *ma, const char *key, double *value);
 /* Return a module argument as pa_volume_t value in *value */
 int pa_modargs_get_value_volume(pa_modargs *ma, const char *key, pa_volume_t *value);
 
+/* Return sample rate from the "rate" argument */
+int pa_modargs_get_sample_rate(pa_modargs *ma, uint32_t *rate);
+
 /* Return sample spec data from the three arguments "rate", "format" and "channels" */
 int pa_modargs_get_sample_spec(pa_modargs *ma, pa_sample_spec *ss);
 
 /* Return channel map data from the argument "channel_map" if name is NULL, otherwise read from the specified argument */
 int pa_modargs_get_channel_map(pa_modargs *ma, const char *name, pa_channel_map *map);
+
+/* Return resample method from the argument "resample_method" */
+int pa_modargs_get_resample_method(pa_modargs *ma, pa_resample_method_t *method);
 
 /* Combination of pa_modargs_get_sample_spec() and
 pa_modargs_get_channel_map(). Not always suitable, since this routine

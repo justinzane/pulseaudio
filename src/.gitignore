@@ -2,11 +2,11 @@ TAGS
 *.lo
 *.o
 *.la
+*.gcno
 .deps
 .libs
 /Makefile
 /Makefile.in
-proximity-helper
 client.conf
 daemon.conf
 default.pa
@@ -22,7 +22,6 @@ pasuspender
 pax11publish
 pulseaudio
 start-pulseaudio-x11
-start-pulseaudio-kde
 *-symdef.h
 *-orc-gen.[ch]
 # tests
@@ -45,6 +44,7 @@ hook-list-test
 interpol-test
 ipacl-test
 lock-autospawn-test
+lo-latency-test
 mainloop-test
 mainloop-test-glib
 mcalign-test
@@ -64,6 +64,7 @@ rtstutter
 sig2str-test
 sigbus-test
 smoother-test
+srbchannel-test
 stripnul
 strlist-test
 sync-playback

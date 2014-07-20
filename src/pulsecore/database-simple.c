@@ -37,12 +37,11 @@
 
 #include "database.h"
 
-
 typedef struct simple_data {
     char *filename;
     char *tmp_filename;
     pa_hashmap *map;
-    pa_bool_t read_only;
+    bool read_only;
 } simple_data;
 
 typedef struct entry {
@@ -176,7 +175,7 @@ static int fill_data(simple_data *db, FILE *f) {
     pa_datum data;
     void *d = NULL;
     ssize_t l = 0;
-    pa_bool_t append = FALSE;
+    bool append = false;
     enum { FIELD_KEY = 0, FIELD_DATA } field = FIELD_KEY;
 
     pa_assert(db);
@@ -198,7 +197,7 @@ static int fill_data(simple_data *db, FILE *f) {
             case FIELD_DATA:
                 data.data = d;
                 data.size = l;
-                append = TRUE;
+                append = true;
                 break;
         }
 
@@ -209,7 +208,7 @@ static int fill_data(simple_data *db, FILE *f) {
             e->data.data = data.data;
             e->data.size = data.size;
             pa_hashmap_put(db->map, &e->key, e);
-            append = FALSE;
+            append = false;
             field = FIELD_KEY;
         }
     }
@@ -225,7 +224,7 @@ static int fill_data(simple_data *db, FILE *f) {
     return pa_hashmap_size(db->map);
 }
 
-pa_database* pa_database_open(const char *fn, pa_bool_t for_write) {
+pa_database* pa_database_open(const char *fn, bool for_write) {
     FILE *f;
     char *path;
     simple_data *db;
@@ -239,7 +238,7 @@ pa_database* pa_database_open(const char *fn, pa_bool_t for_write) {
 
     if (f || errno == ENOENT) { /* file not found is ok */
         db = pa_xnew0(simple_data, 1);
-        db->map = pa_hashmap_new(hash_func, compare_func);
+        db->map = pa_hashmap_new_full(hash_func, compare_func, NULL, (pa_free_cb_t) free_entry);
         db->filename = pa_xstrdup(path);
         db->tmp_filename = pa_sprintf_malloc(".%s.tmp", db->filename);
         db->read_only = !for_write;
@@ -266,7 +265,7 @@ void pa_database_close(pa_database *database) {
     pa_database_sync(database);
     pa_xfree(db->filename);
     pa_xfree(db->tmp_filename);
-    pa_hashmap_free(db->map, (pa_free_cb_t) free_entry);
+    pa_hashmap_free(db->map);
     pa_xfree(db);
 }
 
@@ -289,7 +288,7 @@ pa_datum* pa_database_get(pa_database *database, const pa_datum *key, pa_datum* 
     return data;
 }
 
-int pa_database_set(pa_database *database, const pa_datum *key, const pa_datum* data, pa_bool_t overwrite) {
+int pa_database_set(pa_database *database, const pa_datum *key, const pa_datum* data, bool overwrite) {
     simple_data *db = (simple_data*)database;
     entry *e;
     int ret = 0;
@@ -323,18 +322,11 @@ int pa_database_set(pa_database *database, const pa_datum *key, const pa_datum* 
 
 int pa_database_unset(pa_database *database, const pa_datum *key) {
     simple_data *db = (simple_data*)database;
-    entry *e;
 
     pa_assert(db);
     pa_assert(key);
 
-    e = pa_hashmap_remove(db->map, key);
-    if (!e)
-        return -1;
-
-    free_entry(e);
-
-    return 0;
+    return pa_hashmap_remove_and_free(db->map, key);
 }
 
 int pa_database_clear(pa_database *database) {
@@ -342,7 +334,7 @@ int pa_database_clear(pa_database *database) {
 
     pa_assert(db);
 
-    pa_hashmap_remove_all(db->map, (pa_free_cb_t) free_entry);
+    pa_hashmap_remove_all(db->map);
 
     return 0;
 }
@@ -382,7 +374,7 @@ pa_datum* pa_database_next(pa_database *database, const pa_datum *key, pa_datum 
     entry *e;
     entry *search;
     void *state;
-    pa_bool_t pick_now;
+    bool pick_now;
 
     pa_assert(db);
     pa_assert(next);
@@ -393,14 +385,14 @@ pa_datum* pa_database_next(pa_database *database, const pa_datum *key, pa_datum 
     search = pa_hashmap_get(db->map, key);
 
     state = NULL;
-    pick_now = FALSE;
+    pick_now = false;
 
     while ((e = pa_hashmap_iterate(db->map, &state, NULL))) {
         if (pick_now)
             break;
 
         if (search == e)
-            pick_now = TRUE;
+            pick_now = true;
     }
 
     if (!pick_now || !e)

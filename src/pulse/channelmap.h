@@ -376,7 +376,7 @@ const char* pa_channel_map_to_name(const pa_channel_map *map) PA_GCC_PURE;
  */
 const char* pa_channel_map_to_pretty_name(const pa_channel_map *map) PA_GCC_PURE;
 
-/** Returns TRUE if the specified channel position is available at
+/** Returns non-zero if the specified channel position is available at
  * least once in the channel map. \since 0.9.16 */
 int pa_channel_map_has_position(const pa_channel_map *map, pa_channel_position_t p) PA_GCC_PURE;
 

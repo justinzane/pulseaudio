@@ -72,7 +72,7 @@
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("ESOUND Sink");
 PA_MODULE_VERSION(PACKAGE_VERSION);
-PA_MODULE_LOAD_ONCE(FALSE);
+PA_MODULE_LOAD_ONCE(false);
 PA_MODULE_USAGE(
         "sink_name=<name for the sink> "
         "sink_properties=<properties for the sink> "
@@ -159,7 +159,7 @@ static int sink_process_msg(pa_msgobject *o, int code, void *data, int64_t offse
                 case PA_SINK_RUNNING:
 
                     if (u->sink->thread_info.state == PA_SINK_SUSPENDED)
-                        pa_smoother_resume(u->smoother, pa_rtclock_now(), TRUE);
+                        pa_smoother_resume(u->smoother, pa_rtclock_now(), true);
 
                     break;
 
@@ -307,7 +307,7 @@ static void thread_func(void *userdata) {
             pollfd->events = (short) (PA_SINK_IS_OPENED(u->sink->thread_info.state) ? POLLOUT : 0);
         }
 
-        if ((ret = pa_rtpoll_run(u->rtpoll, TRUE)) < 0)
+        if ((ret = pa_rtpoll_run(u->rtpoll, true)) < 0)
             goto fail;
 
         if (ret == 0)
@@ -345,7 +345,7 @@ static int do_write(struct userdata *u) {
     if (u->write_data) {
         pa_assert(u->write_index < u->write_length);
 
-        if ((r = pa_iochannel_write(u->io, (uint8_t*) u->write_data + u->write_index, u->write_length - u->write_index)) <= 0) {
+        if ((r = pa_iochannel_write(u->io, (uint8_t*) u->write_data + u->write_index, u->write_length - u->write_index)) < 0) {
             pa_log("write() failed: %s", pa_cstrerror(errno));
             return -1;
         }
@@ -370,7 +370,7 @@ static int do_write(struct userdata *u) {
         pa_assert(u->fd < 0);
         u->fd = pa_iochannel_get_send_fd(u->io);
 
-        pa_iochannel_set_noclose(u->io, TRUE);
+        pa_iochannel_set_noclose(u->io, true);
         pa_iochannel_free(u->io);
         u->io = NULL;
 
@@ -497,7 +497,7 @@ static void io_callback(pa_iochannel *io, void*userdata) {
             u->io = NULL;
         }
 
-        pa_module_unload_request(u->module, TRUE);
+        pa_module_unload_request(u->module, true);
     }
 }
 
@@ -509,7 +509,7 @@ static void on_connection(pa_socket_client *c, pa_iochannel*io, void *userdata) 
 
     if (!io) {
         pa_log("Connection failed: %s", pa_cstrerror(errno));
-        pa_module_unload_request(u->module, TRUE);
+        pa_module_unload_request(u->module, true);
         return;
     }
 
@@ -527,6 +527,8 @@ int pa__init(pa_module*m) {
     const char *espeaker;
     uint32_t key;
     pa_sink_new_data data;
+    char *cookie_path;
+    int r;
 
     pa_assert(m);
 
@@ -555,11 +557,11 @@ int pa__init(pa_module*m) {
     u->smoother = pa_smoother_new(
             PA_USEC_PER_SEC,
             PA_USEC_PER_SEC*2,
-            TRUE,
-            TRUE,
+            true,
+            true,
             10,
             0,
-            FALSE);
+            false);
     pa_memchunk_reset(&u->memchunk);
     u->offset = 0;
 
@@ -613,16 +615,25 @@ int pa__init(pa_module*m) {
     pa_sink_set_asyncmsgq(u->sink, u->thread_mq.inq);
     pa_sink_set_rtpoll(u->sink, u->rtpoll);
 
-    if (!(u->client = pa_socket_client_new_string(u->core->mainloop, TRUE, espeaker, ESD_DEFAULT_PORT))) {
+    if (!(u->client = pa_socket_client_new_string(u->core->mainloop, true, espeaker, ESD_DEFAULT_PORT))) {
         pa_log("Failed to connect to server.");
         goto fail;
     }
 
     pa_socket_client_set_callback(u->client, on_connection, u);
 
+    cookie_path = pa_xstrdup(pa_modargs_get_value(ma, "cookie", NULL));
+    if (!cookie_path) {
+        if (pa_append_to_home_dir(".esd_auth", &cookie_path) < 0)
+            goto fail;
+    }
+
     /* Prepare the initial request */
     u->write_data = pa_xmalloc(u->write_length = ESD_KEY_LEN + sizeof(int32_t));
-    if (pa_authkey_load_auto(pa_modargs_get_value(ma, "cookie", ".esd_auth"), TRUE, u->write_data, ESD_KEY_LEN) < 0) {
+
+    r = pa_authkey_load(cookie_path, true, u->write_data, ESD_KEY_LEN);
+    pa_xfree(cookie_path);
+    if (r < 0) {
         pa_log("Failed to load cookie");
         goto fail;
     }

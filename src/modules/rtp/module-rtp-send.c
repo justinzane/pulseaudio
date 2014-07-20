@@ -57,7 +57,7 @@
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("Read data from source and send it to the network via RTP/SAP/SDP");
 PA_MODULE_VERSION(PACKAGE_VERSION);
-PA_MODULE_LOAD_ONCE(FALSE);
+PA_MODULE_LOAD_ONCE(false);
 PA_MODULE_USAGE(
         "source=<name of the source> "
         "format=<sample format> "
@@ -68,7 +68,8 @@ PA_MODULE_USAGE(
         "port=<port number> "
         "mtu=<maximum transfer unit> "
         "loop=<loopback to local host?> "
-        "ttl=<ttl value>"
+        "ttl=<ttl value> "
+        "inhibit_auto_suspend=<always|never|only_with_non_monitor_sources>"
 );
 
 #define DEFAULT_PORT 46000
@@ -92,7 +93,14 @@ static const char* const valid_modargs[] = {
     "mtu" ,
     "loop",
     "ttl",
+    "inhibit_auto_suspend",
     NULL
+};
+
+enum inhibit_auto_suspend {
+    INHIBIT_AUTO_SUSPEND_ALWAYS,
+    INHIBIT_AUTO_SUSPEND_NEVER,
+    INHIBIT_AUTO_SUSPEND_ONLY_WITH_NON_MONITOR_SOURCES
 };
 
 struct userdata {
@@ -106,6 +114,8 @@ struct userdata {
     size_t mtu;
 
     pa_time_event *sap_event;
+
+    enum inhibit_auto_suspend inhibit_auto_suspend;
 };
 
 /* Called from I/O thread context */
@@ -126,7 +136,7 @@ static int source_output_process_msg(pa_msgobject *o, int code, void *data, int6
 }
 
 /* Called from I/O thread context */
-static void source_output_push(pa_source_output *o, const pa_memchunk *chunk) {
+static void source_output_push_cb(pa_source_output *o, const pa_memchunk *chunk) {
     struct userdata *u;
     pa_source_output_assert_ref(o);
     pa_assert_se(u = o->userdata);
@@ -139,13 +149,46 @@ static void source_output_push(pa_source_output *o, const pa_memchunk *chunk) {
     pa_rtp_send(&u->rtp_context, u->mtu, u->memblockq);
 }
 
+static pa_source_output_flags_t get_dont_inhibit_auto_suspend_flag(pa_source *source,
+                                                                   enum inhibit_auto_suspend inhibit_auto_suspend) {
+    pa_assert(source);
+
+    switch (inhibit_auto_suspend) {
+        case INHIBIT_AUTO_SUSPEND_ALWAYS:
+            return 0;
+
+        case INHIBIT_AUTO_SUSPEND_NEVER:
+            return PA_SOURCE_OUTPUT_DONT_INHIBIT_AUTO_SUSPEND;
+
+        case INHIBIT_AUTO_SUSPEND_ONLY_WITH_NON_MONITOR_SOURCES:
+            return source->monitor_of ? 0 : PA_SOURCE_OUTPUT_DONT_INHIBIT_AUTO_SUSPEND;
+    }
+
+    pa_assert_not_reached();
+}
+
+/* Called from the main thread. */
+static void source_output_moving_cb(pa_source_output *o, pa_source *dest) {
+    struct userdata *u;
+
+    pa_assert(o);
+
+    u = o->userdata;
+
+    if (!dest)
+        return;
+
+    o->flags &= ~PA_SOURCE_OUTPUT_DONT_INHIBIT_AUTO_SUSPEND;
+    o->flags |= get_dont_inhibit_auto_suspend_flag(dest, u->inhibit_auto_suspend);
+}
+
 /* Called from main context */
-static void source_output_kill(pa_source_output* o) {
+static void source_output_kill_cb(pa_source_output* o) {
     struct userdata *u;
     pa_source_output_assert_ref(o);
     pa_assert_se(u = o->userdata);
 
-    pa_module_unload_request(u->module, TRUE);
+    pa_module_unload_request(u->module, true);
 
     pa_source_output_unlink(u->source_output);
     pa_source_output_unref(u->source_output);
@@ -187,7 +230,9 @@ int pa__init(pa_module*m) {
     int r, j;
     socklen_t k;
     char hn[128], *n;
-    pa_bool_t loop = FALSE;
+    bool loop = false;
+    enum inhibit_auto_suspend inhibit_auto_suspend = INHIBIT_AUTO_SUSPEND_ONLY_WITH_NON_MONITOR_SOURCES;
+    const char *inhibit_auto_suspend_str;
     pa_source_output_new_data data;
 
     pa_assert(m);
@@ -205,6 +250,19 @@ int pa__init(pa_module*m) {
     if (pa_modargs_get_value_boolean(ma, "loop", &loop) < 0) {
         pa_log("Failed to parse \"loop\" parameter.");
         goto fail;
+    }
+
+    if ((inhibit_auto_suspend_str = pa_modargs_get_value(ma, "inhibit_auto_suspend", NULL))) {
+        if (pa_streq(inhibit_auto_suspend_str, "always"))
+            inhibit_auto_suspend = INHIBIT_AUTO_SUSPEND_ALWAYS;
+        else if (pa_streq(inhibit_auto_suspend_str, "never"))
+            inhibit_auto_suspend = INHIBIT_AUTO_SUSPEND_NEVER;
+        else if (pa_streq(inhibit_auto_suspend_str, "only_with_non_monitor_sources"))
+            inhibit_auto_suspend = INHIBIT_AUTO_SUSPEND_ONLY_WITH_NON_MONITOR_SOURCES;
+        else {
+            pa_log("Failed to parse the \"inhibit_auto_suspend\" parameter.");
+            goto fail;
+        }
     }
 
     ss = s->sample_spec;
@@ -251,11 +309,14 @@ int pa__init(pa_module*m) {
     if (inet_pton(AF_INET, src_addr, &src_sa4.sin_addr) > 0) {
         src_sa4.sin_family = af = AF_INET;
         src_sa4.sin_port = htons(0);
+        memset(&src_sa4.sin_zero, 0, sizeof(src_sa4.sin_zero));
         src_sap_sa4 = src_sa4;
 #ifdef HAVE_IPV6
     } else if (inet_pton(AF_INET6, src_addr, &src_sa6.sin6_addr) > 0) {
         src_sa6.sin6_family = af = AF_INET6;
         src_sa6.sin6_port = htons(0);
+        src_sa6.sin6_flowinfo = 0;
+        src_sa6.sin6_scope_id = 0;
         src_sap_sa6 = src_sa6;
 #endif
     } else {
@@ -270,12 +331,15 @@ int pa__init(pa_module*m) {
     if (inet_pton(AF_INET, dst_addr, &dst_sa4.sin_addr) > 0) {
         dst_sa4.sin_family = af = AF_INET;
         dst_sa4.sin_port = htons((uint16_t) port);
+        memset(&dst_sa4.sin_zero, 0, sizeof(dst_sa4.sin_zero));
         dst_sap_sa4 = dst_sa4;
         dst_sap_sa4.sin_port = htons(SAP_PORT);
 #ifdef HAVE_IPV6
     } else if (inet_pton(AF_INET6, dst_addr, &dst_sa6.sin6_addr) > 0) {
         dst_sa6.sin6_family = af = AF_INET6;
         dst_sa6.sin6_port = htons((uint16_t) port);
+        dst_sa6.sin6_flowinfo = 0;
+        dst_sa6.sin6_scope_id = 0;
         dst_sap_sa6 = dst_sa6;
         dst_sap_sa6.sin6_port = htons(SAP_PORT);
 #endif
@@ -368,10 +432,10 @@ int pa__init(pa_module*m) {
     pa_proplist_setf(data.proplist, "rtp.ttl", "%lu", (unsigned long) ttl);
     data.driver = __FILE__;
     data.module = m;
-    pa_source_output_new_data_set_source(&data, s, FALSE);
+    pa_source_output_new_data_set_source(&data, s, false);
     pa_source_output_new_data_set_sample_spec(&data, &ss);
     pa_source_output_new_data_set_channel_map(&data, &cm);
-    data.flags = PA_SOURCE_OUTPUT_DONT_INHIBIT_AUTO_SUSPEND;
+    data.flags |= get_dont_inhibit_auto_suspend_flag(s, inhibit_auto_suspend);
 
     pa_source_output_new(&o, m->core, &data);
     pa_source_output_new_data_done(&data);
@@ -382,8 +446,9 @@ int pa__init(pa_module*m) {
     }
 
     o->parent.process_msg = source_output_process_msg;
-    o->push = source_output_push;
-    o->kill = source_output_kill;
+    o->push = source_output_push_cb;
+    o->moving = source_output_moving_cb;
+    o->kill = source_output_kill_cb;
 
     pa_log_info("Configured source latency of %llu ms.",
                 (unsigned long long) pa_source_output_set_requested_latency(o, pa_bytes_to_usec(mtu, &o->sample_spec)) / PA_USEC_PER_MSEC);
@@ -435,6 +500,7 @@ int pa__init(pa_module*m) {
     pa_sap_send(&u->sap_context, 0);
 
     u->sap_event = pa_core_rttime_new(m->core, pa_rtclock_now() + SAP_INTERVAL, sap_event_cb, u);
+    u->inhibit_auto_suspend = inhibit_auto_suspend;
 
     pa_source_output_put(u->source_output);
 

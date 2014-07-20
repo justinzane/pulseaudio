@@ -66,6 +66,8 @@
     } while (0)
 #define PA_UCM_IS_MODIFIER_MAPPING(m) ((pa_proplist_gets((m)->proplist, PA_ALSA_PROP_UCM_MODIFIER)) != NULL)
 
+#ifdef HAVE_ALSA_UCM
+
 struct ucm_items {
     const char *id;
     const char *property;
@@ -82,10 +84,12 @@ static struct ucm_items item[] = {
     {"PlaybackVolume", PA_ALSA_PROP_UCM_PLAYBACK_VOLUME},
     {"PlaybackSwitch", PA_ALSA_PROP_UCM_PLAYBACK_SWITCH},
     {"PlaybackPriority", PA_ALSA_PROP_UCM_PLAYBACK_PRIORITY},
+    {"PlaybackRate", PA_ALSA_PROP_UCM_PLAYBACK_RATE},
     {"PlaybackChannels", PA_ALSA_PROP_UCM_PLAYBACK_CHANNELS},
     {"CaptureVolume", PA_ALSA_PROP_UCM_CAPTURE_VOLUME},
     {"CaptureSwitch", PA_ALSA_PROP_UCM_CAPTURE_SWITCH},
     {"CapturePriority", PA_ALSA_PROP_UCM_CAPTURE_PRIORITY},
+    {"CaptureRate", PA_ALSA_PROP_UCM_CAPTURE_RATE},
     {"CaptureChannels", PA_ALSA_PROP_UCM_CAPTURE_CHANNELS},
     {"TQ", PA_ALSA_PROP_UCM_QOS},
     {NULL, NULL},
@@ -133,7 +137,7 @@ static int ucm_get_property(pa_alsa_ucm_verb *verb, snd_use_case_mgr_t *uc_mgr, 
         id = pa_sprintf_malloc("=%s//%s", item[i].id, verb_name);
         err = snd_use_case_get(uc_mgr, id, &value);
         pa_xfree(id);
-        if (err < 0 )
+        if (err < 0)
             continue;
 
         pa_log_debug("Got %s for verb %s: %s", item[i].id, verb_name, value);
@@ -210,7 +214,7 @@ static int ucm_get_device_property(
     value = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_PLAYBACK_CHANNELS);
     if (value) { /* output */
         /* get channels */
-        if (pa_atou(value, &ui) == 0 && ui < PA_CHANNELS_MAX)
+        if (pa_atou(value, &ui) == 0 && pa_channels_valid(ui))
             device->playback_channels = ui;
         else
             pa_log("UCM playback channels %s for device %s out of range", value, device_name);
@@ -230,7 +234,7 @@ static int ucm_get_device_property(
     value = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_CAPTURE_CHANNELS);
     if (value) { /* input */
         /* get channels */
-        if (pa_atou(value, &ui) == 0 && ui < PA_CHANNELS_MAX)
+        if (pa_atou(value, &ui) == 0 && pa_channels_valid(ui))
             device->capture_channels = ui;
         else
             pa_log("UCM capture channels %s for device %s out of range", value, device_name);
@@ -254,8 +258,18 @@ static int ucm_get_device_property(
         device->capture_channels = 2;
     }
 
-    /* get priority of device */
+    /* get rate and priority of device */
     if (device->playback_channels) { /* sink device */
+        /* get rate */
+        if ((value = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_PLAYBACK_RATE)) ||
+            (value = pa_proplist_gets(verb->proplist, PA_ALSA_PROP_UCM_PLAYBACK_RATE))) {
+            if (pa_atou(value, &ui) == 0 && pa_sample_rate_valid(ui)) {
+                pa_log_debug("UCM playback device %s rate %d", device_name, ui);
+                device->playback_rate = ui;
+            } else
+                pa_log_debug("UCM playback device %s has bad rate %s", device_name, value);
+        }
+
         value = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_PLAYBACK_PRIORITY);
         if (value) {
             /* get priority from ucm config */
@@ -267,6 +281,16 @@ static int ucm_get_device_property(
     }
 
     if (device->capture_channels) { /* source device */
+        /* get rate */
+        if ((value = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_CAPTURE_RATE)) ||
+            (value = pa_proplist_gets(verb->proplist, PA_ALSA_PROP_UCM_CAPTURE_RATE))) {
+            if (pa_atou(value, &ui) == 0 && pa_sample_rate_valid(ui)) {
+                pa_log_debug("UCM capture device %s rate %d", device_name, ui);
+                device->capture_rate = ui;
+            } else
+                pa_log_debug("UCM capture device %s has bad rate %s", device_name, value);
+        }
+
         value = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_CAPTURE_PRIORITY);
         if (value) {
             /* get priority from ucm config */
@@ -336,7 +360,7 @@ static int ucm_get_modifier_property(pa_alsa_ucm_modifier *modifier, snd_use_cas
         id = pa_sprintf_malloc("=%s/%s", item[i].id, modifier_name);
         err = snd_use_case_get(uc_mgr, id, &value);
         pa_xfree(id);
-        if (err < 0 )
+        if (err < 0)
             continue;
 
         pa_log_debug("Got %s for modifier %s: %s", item[i].id, modifier_name, value);
@@ -451,10 +475,10 @@ static void add_media_role(const char *name, pa_alsa_ucm_device *list, const cha
 static char *modifier_name_to_role(const char *mod_name, bool *is_sink) {
     char *sub = NULL, *tmp;
 
-    *is_sink = FALSE;
+    *is_sink = false;
 
     if (pa_startswith(mod_name, "Play")) {
-        *is_sink = TRUE;
+        *is_sink = true;
         sub = pa_xstrdup(mod_name + 4);
     } else if (pa_startswith(mod_name, "Capture"))
         sub = pa_xstrdup(mod_name + 7);
@@ -476,7 +500,7 @@ static char *modifier_name_to_role(const char *mod_name, bool *is_sink) {
 
 static void ucm_set_media_roles(pa_alsa_ucm_modifier *modifier, pa_alsa_ucm_device *list, const char *mod_name) {
     int i;
-    bool is_sink = FALSE;
+    bool is_sink = false;
     char *sub = NULL;
     const char *role_name;
 
@@ -525,8 +549,7 @@ static void append_lost_relationship(pa_alsa_ucm_device *dev) {
     }
 }
 
-int pa_alsa_ucm_query_profiles(pa_alsa_ucm_config *ucm, int card_index)
-{
+int pa_alsa_ucm_query_profiles(pa_alsa_ucm_config *ucm, int card_index) {
     char *card_name;
     const char **verb_list;
     int num_verbs, i, err = 0;
@@ -641,6 +664,13 @@ int pa_alsa_ucm_get_verb(snd_use_case_mgr_t *uc_mgr, const char *verb_name, cons
     return 0;
 }
 
+static int pa_alsa_ucm_device_cmp(const void *a, const void *b) {
+    const pa_alsa_ucm_device *d1 = *(pa_alsa_ucm_device **)a;
+    const pa_alsa_ucm_device *d2 = *(pa_alsa_ucm_device **)b;
+
+    return strcmp(pa_proplist_gets(d1->proplist, PA_ALSA_PROP_UCM_NAME), pa_proplist_gets(d2->proplist, PA_ALSA_PROP_UCM_NAME));
+}
+
 static void ucm_add_port_combination(
         pa_hashmap *hash,
         pa_alsa_ucm_mapping_context *context,
@@ -654,12 +684,20 @@ static void ucm_add_port_combination(
     pa_device_port *port;
     int i;
     unsigned priority;
+    double prio2;
     char *name, *desc;
     const char *dev_name;
     const char *direction;
-    pa_alsa_ucm_device *dev;
+    pa_alsa_ucm_device *sorted[num], *dev;
 
-    dev = pdevices[0];
+    for (i = 0; i < num; i++)
+        sorted[i] = pdevices[i];
+
+    /* Sort by alphabetical order so as to have a deterministic naming scheme
+     * for combination ports */
+    qsort(&sorted[0], num, sizeof(pa_alsa_ucm_device *), pa_alsa_ucm_device_cmp);
+
+    dev = sorted[0];
     dev_name = pa_proplist_gets(dev->proplist, PA_ALSA_PROP_UCM_NAME);
 
     name = pa_sprintf_malloc("%s%s", is_sink ? PA_UCM_PRE_TAG_OUTPUT : PA_UCM_PRE_TAG_INPUT, dev_name);
@@ -667,11 +705,12 @@ static void ucm_add_port_combination(
             : pa_sprintf_malloc("Combination port for %s", dev_name);
 
     priority = is_sink ? dev->playback_priority : dev->capture_priority;
+    prio2 = (priority == 0 ? 0 : 1.0/priority);
 
     for (i = 1; i < num; i++) {
         char *tmp;
 
-        dev = pdevices[i];
+        dev = sorted[i];
         dev_name = pa_proplist_gets(dev->proplist, PA_ALSA_PROP_UCM_NAME);
 
         tmp = pa_sprintf_malloc("%s+%s", name, dev_name);
@@ -682,13 +721,30 @@ static void ucm_add_port_combination(
         pa_xfree(desc);
         desc = tmp;
 
-        /* FIXME: Is this true? */
-        priority += (is_sink ? dev->playback_priority : dev->capture_priority);
+        priority = is_sink ? dev->playback_priority : dev->capture_priority;
+        if (priority != 0 && prio2 > 0)
+            prio2 += 1.0/priority;
     }
+
+    /* Make combination ports always have lower priority, and use the formula
+       1/p = 1/p1 + 1/p2 + ... 1/pn.
+       This way, the result will always be less than the individual components,
+       yet higher components will lead to higher result. */
+
+    if (num > 1)
+        priority = prio2 > 0 ? 1.0/prio2 : 0;
 
     port = pa_hashmap_get(ports, name);
     if (!port) {
-        port = pa_device_port_new(core, pa_strna(name), desc, 0);
+        pa_device_port_new_data port_data;
+
+        pa_device_port_new_data_init(&port_data);
+        pa_device_port_new_data_set_name(&port_data, name);
+        pa_device_port_new_data_set_description(&port_data, desc);
+        pa_device_port_new_data_set_direction(&port_data, is_sink ? PA_DIRECTION_OUTPUT : PA_DIRECTION_INPUT);
+
+        port = pa_device_port_new(core, &port_data, 0);
+        pa_device_port_new_data_done(&port_data);
         pa_assert(port);
 
         pa_hashmap_put(ports, port->name, port);
@@ -697,10 +753,6 @@ static void ucm_add_port_combination(
     }
 
     port->priority = priority;
-    if (is_sink)
-        port->is_output = TRUE;
-    else
-        port->is_input = TRUE;
 
     pa_xfree(name);
     pa_xfree(desc);
@@ -709,7 +761,7 @@ static void ucm_add_port_combination(
     pa_log_debug("Port %s direction %s, priority %d", port->name, direction, priority);
 
     if (cp) {
-        pa_log_debug("Adding port %s to profile %s", port->name, cp->name);
+        pa_log_debug("Adding profile %s to port %s.", cp->name, port->name);
         pa_hashmap_put(port->profiles, cp->name, cp);
     }
 
@@ -726,7 +778,7 @@ static int ucm_port_contains(const char *port_name, const char *dev_name, bool i
     int len;
 
     if (!port_name || !dev_name)
-        return FALSE;
+        return false;
 
     port_name += is_sink ? strlen(PA_UCM_PRE_TAG_OUTPUT) : strlen(PA_UCM_PRE_TAG_INPUT);
 
@@ -1054,8 +1106,7 @@ static void alsa_mapping_add_ucm_modifier(pa_alsa_mapping *m, pa_alsa_ucm_modifi
         m->description = pa_xstrdup(new_desc);
     pa_xfree(cur_desc);
 
-    if (!m->description)
-        pa_xstrdup("");
+    m->description = m->description ? m->description : pa_xstrdup("");
 
     /* Modifier sinks should not be routed to by default */
     m->priority = 0;
@@ -1073,7 +1124,10 @@ static void alsa_mapping_add_ucm_modifier(pa_alsa_mapping *m, pa_alsa_ucm_modifi
     }
 
     if (channel_str) {
-        pa_assert_se(pa_atou(channel_str, &channels) == 0 && channels < PA_CHANNELS_MAX);
+        /* FIXME: channel_str is unsanitized input from the UCM configuration,
+         * we should do proper error handling instead of asserting.
+         * https://bugs.freedesktop.org/show_bug.cgi?id=71823 */
+        pa_assert_se(pa_atou(channel_str, &channels) == 0 && pa_channels_valid(channels));
         pa_log_debug("Got channel count %" PRIu32 " for modifier", channels);
     }
 
@@ -1095,7 +1149,7 @@ static int ucm_create_mapping_direction(
 
     pa_alsa_mapping *m;
     char *mapping_name;
-    unsigned priority, channels;
+    unsigned priority, rate, channels;
 
     mapping_name = pa_sprintf_malloc("Mapping %s: %s: %s", verb_name, device_str, is_sink ? "sink" : "source");
 
@@ -1109,6 +1163,7 @@ static int ucm_create_mapping_direction(
     pa_xfree(mapping_name);
 
     priority = is_sink ? device->playback_priority : device->capture_priority;
+    rate = is_sink ? device->playback_rate : device->capture_rate;
     channels = is_sink ? device->playback_channels : device->capture_channels;
 
     if (!m->ucm_context.ucm_devices) {   /* new mapping */
@@ -1121,6 +1176,8 @@ static int ucm_create_mapping_direction(
         m->direction = is_sink ? PA_ALSA_DIRECTION_OUTPUT : PA_ALSA_DIRECTION_INPUT;
 
         ucm_add_mapping(p, m);
+        if (rate)
+            m->sample_spec.rate = rate;
         pa_channel_map_init_extend(&m->channel_map, channels, PA_CHANNEL_MAP_ALSA);
     }
 
@@ -1200,9 +1257,9 @@ static int ucm_create_mapping(
     }
 
     if (sink)
-        ret = ucm_create_mapping_direction(ucm, ps, p, device, verb_name, device_name, sink, TRUE);
+        ret = ucm_create_mapping_direction(ucm, ps, p, device, verb_name, device_name, sink, true);
     if (ret == 0 && source)
-        ret = ucm_create_mapping_direction(ucm, ps, p, device, verb_name, device_name, source, FALSE);
+        ret = ucm_create_mapping_direction(ucm, ps, p, device, verb_name, device_name, source, false);
 
     return ret;
 }
@@ -1257,7 +1314,7 @@ static int ucm_create_profile(
     p->output_mappings = pa_idxset_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
     p->input_mappings = pa_idxset_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
 
-    p->supported = TRUE;
+    p->supported = true;
     pa_hashmap_put(ps->profiles, p->name, p);
 
     /* TODO: get profile priority from ucm info or policy management */
@@ -1302,9 +1359,9 @@ static int ucm_create_profile(
         source = pa_proplist_gets(mod->proplist, PA_ALSA_PROP_UCM_SOURCE);
 
         if (sink)
-            ucm_create_mapping_for_modifier(ucm, ps, p, mod, verb_name, name, sink, TRUE);
+            ucm_create_mapping_for_modifier(ucm, ps, p, mod, verb_name, name, sink, true);
         else if (source)
-            ucm_create_mapping_for_modifier(ucm, ps, p, mod, verb_name, name, source, FALSE);
+            ucm_create_mapping_for_modifier(ucm, ps, p, mod, verb_name, name, source, false);
     }
 
     pa_alsa_profile_dump(p);
@@ -1402,7 +1459,7 @@ static void ucm_probe_profile_set(pa_alsa_ucm_config *ucm, pa_alsa_profile_set *
 
         if ((snd_use_case_set(ucm->ucm_mgr, "_verb", p->name)) < 0) {
             pa_log("Failed to set verb %s", p->name);
-            p->supported = FALSE;
+            p->supported = false;
             continue;
         }
 
@@ -1415,7 +1472,7 @@ static void ucm_probe_profile_set(pa_alsa_ucm_config *ucm, pa_alsa_profile_set *
 
             m->output_pcm = mapping_open_pcm(ucm, m, SND_PCM_STREAM_PLAYBACK);
             if (!m->output_pcm) {
-                p->supported = FALSE;
+                p->supported = false;
                 break;
             }
         }
@@ -1430,7 +1487,7 @@ static void ucm_probe_profile_set(pa_alsa_ucm_config *ucm, pa_alsa_profile_set *
 
                 m->input_pcm = mapping_open_pcm(ucm, m, SND_PCM_STREAM_CAPTURE);
                 if (!m->input_pcm) {
-                    p->supported = FALSE;
+                    p->supported = false;
                     break;
                 }
             }
@@ -1481,11 +1538,11 @@ pa_alsa_profile_set* pa_alsa_ucm_add_profile_set(pa_alsa_ucm_config *ucm, pa_cha
             continue;
         }
 
-	    ucm_create_profile(ucm, ps, verb, verb_name, verb_desc);
+        ucm_create_profile(ucm, ps, verb, verb_name, verb_desc);
     }
 
     ucm_probe_profile_set(ucm, ps);
-    ps->probed = TRUE;
+    ps->probed = true;
 
     return ps;
 }
@@ -1615,3 +1672,59 @@ void pa_alsa_ucm_roled_stream_end(pa_alsa_ucm_config *ucm, const char *role, pa_
         }
     }
 }
+
+#else /* HAVE_ALSA_UCM */
+
+/* Dummy functions for systems without UCM support */
+
+int pa_alsa_ucm_query_profiles(pa_alsa_ucm_config *ucm, int card_index) {
+        pa_log_info("UCM not available.");
+        return -1;
+}
+
+pa_alsa_profile_set* pa_alsa_ucm_add_profile_set(pa_alsa_ucm_config *ucm, pa_channel_map *default_channel_map) {
+    return NULL;
+}
+
+int pa_alsa_ucm_set_profile(pa_alsa_ucm_config *ucm, const char *new_profile, const char *old_profile) {
+    return -1;
+}
+
+int pa_alsa_ucm_get_verb(snd_use_case_mgr_t *uc_mgr, const char *verb_name, const char *verb_desc, pa_alsa_ucm_verb **p_verb) {
+    return -1;
+}
+
+void pa_alsa_ucm_add_ports(
+        pa_hashmap **hash,
+        pa_proplist *proplist,
+        pa_alsa_ucm_mapping_context *context,
+        bool is_sink,
+        pa_card *card) {
+}
+
+void pa_alsa_ucm_add_ports_combination(
+        pa_hashmap *hash,
+        pa_alsa_ucm_mapping_context *context,
+        bool is_sink,
+        pa_hashmap *ports,
+        pa_card_profile *cp,
+        pa_core *core) {
+}
+
+int pa_alsa_ucm_set_port(pa_alsa_ucm_mapping_context *context, pa_device_port *port, bool is_sink) {
+    return -1;
+}
+
+void pa_alsa_ucm_free(pa_alsa_ucm_config *ucm) {
+}
+
+void pa_alsa_ucm_mapping_context_free(pa_alsa_ucm_mapping_context *context) {
+}
+
+void pa_alsa_ucm_roled_stream_begin(pa_alsa_ucm_config *ucm, const char *role, pa_direction_t dir) {
+}
+
+void pa_alsa_ucm_roled_stream_end(pa_alsa_ucm_config *ucm, const char *role, pa_direction_t dir) {
+}
+
+#endif

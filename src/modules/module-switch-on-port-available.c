@@ -31,124 +31,132 @@
 #include "module-switch-on-port-available-symdef.h"
 
 struct userdata {
-     pa_hook_slot *callback_slot;
+     pa_hook_slot *available_slot;
+     pa_hook_slot *sink_new_slot;
+     pa_hook_slot *source_new_slot;
 };
 
-static pa_device_port* find_best_port(pa_hashmap *ports) {
-    void *state;
-    pa_device_port* port, *result = NULL;
+static bool profile_good_for_output(pa_card_profile *profile) {
+    pa_sink *sink;
+    uint32_t idx;
 
-    PA_HASHMAP_FOREACH(port, ports, state) {
-        if (result == NULL ||
-            result->available == PA_AVAILABLE_NO ||
-            (port->available != PA_AVAILABLE_NO && port->priority > result->priority)) {
-            result = port;
-        }
+    pa_assert(profile);
+
+    if (profile->card->active_profile->n_sources != profile->n_sources)
+        return false;
+
+    if (profile->card->active_profile->max_source_channels != profile->max_source_channels)
+        return false;
+
+    /* Try not to switch to HDMI sinks from analog when HDMI is becoming available */
+    PA_IDXSET_FOREACH(sink, profile->card->sinks, idx) {
+        if (!sink->active_port)
+            continue;
+
+        if (sink->active_port->available != PA_AVAILABLE_NO)
+            return false;
     }
 
-    return result;
+    return true;
 }
 
-static pa_bool_t try_to_switch_profile(pa_card *card, pa_device_port *port) {
+static bool profile_good_for_input(pa_card_profile *profile) {
+    pa_assert(profile);
+
+    if (profile->card->active_profile->n_sinks != profile->n_sinks)
+        return false;
+
+    if (profile->card->active_profile->max_sink_channels != profile->max_sink_channels)
+        return false;
+
+    return true;
+}
+
+static int try_to_switch_profile(pa_device_port *port) {
     pa_card_profile *best_profile = NULL, *profile;
     void *state;
 
     pa_log_debug("Finding best profile");
 
     PA_HASHMAP_FOREACH(profile, port->profiles, state) {
+        bool good = false;
+
         if (best_profile && best_profile->priority >= profile->priority)
             continue;
 
         /* We make a best effort to keep other direction unchanged */
-        if (!port->is_input) {
-            if (card->active_profile->n_sources != profile->n_sources)
-                continue;
+        switch (port->direction) {
+            case PA_DIRECTION_OUTPUT:
+                good = profile_good_for_output(profile);
+                break;
 
-            if (card->active_profile->max_source_channels != profile->max_source_channels)
-                continue;
+            case PA_DIRECTION_INPUT:
+                good = profile_good_for_input(profile);
+                break;
         }
 
-        if (!port->is_output) {
-            if (card->active_profile->n_sinks != profile->n_sinks)
-                continue;
-
-            if (card->active_profile->max_sink_channels != profile->max_sink_channels)
-                continue;
-        }
-
-        if (port->is_output) {
-            /* Try not to switch to HDMI sinks from analog when HDMI is becoming available */
-            uint32_t state2;
-            pa_sink *sink;
-            pa_bool_t found_active_port = FALSE;
-
-            PA_IDXSET_FOREACH(sink, card->sinks, state2) {
-                if (!sink->active_port)
-                    continue;
-                if (sink->active_port->available != PA_AVAILABLE_NO)
-                    found_active_port = TRUE;
-            }
-
-            if (found_active_port)
-                continue;
-        }
+        if (!good)
+            continue;
 
         best_profile = profile;
     }
 
     if (!best_profile) {
         pa_log_debug("No suitable profile found");
-        return FALSE;
+        return -1;
     }
 
-    if (pa_card_set_profile(card, best_profile->name, FALSE) != 0) {
+    if (pa_card_set_profile(port->card, best_profile, false) != 0) {
         pa_log_debug("Could not set profile %s", best_profile->name);
-        return FALSE;
+        return -1;
     }
 
-    return TRUE;
+    return 0;
 }
 
-static void find_sink_and_source(pa_card *card, pa_device_port *port, pa_sink **si, pa_source **so)
-{
+static void find_sink_and_source(pa_card *card, pa_device_port *port, pa_sink **si, pa_source **so) {
     pa_sink *sink = NULL;
     pa_source *source = NULL;
     uint32_t state;
 
-    if (port->is_output)
-        PA_IDXSET_FOREACH(sink, card->sinks, state)
-            if (port == pa_hashmap_get(sink->ports, port->name))
-                break;
+    switch (port->direction) {
+        case PA_DIRECTION_OUTPUT:
+            PA_IDXSET_FOREACH(sink, card->sinks, state)
+                if (port == pa_hashmap_get(sink->ports, port->name))
+                    break;
+            break;
 
-    if (port->is_input)
-        PA_IDXSET_FOREACH(source, card->sources, state)
-            if (port == pa_hashmap_get(source->ports, port->name))
-                break;
+        case PA_DIRECTION_INPUT:
+            PA_IDXSET_FOREACH(source, card->sources, state)
+                if (port == pa_hashmap_get(source->ports, port->name))
+                    break;
+            break;
+    }
 
     *si = sink;
     *so = source;
 }
 
 static pa_hook_result_t port_available_hook_callback(pa_core *c, pa_device_port *port, void* userdata) {
-    uint32_t state;
     pa_card* card;
     pa_sink *sink;
     pa_source *source;
-    pa_bool_t is_active_profile, is_active_port;
+    bool is_active_profile, is_active_port;
 
     if (port->available == PA_AVAILABLE_UNKNOWN)
         return PA_HOOK_OK;
 
-    pa_log_debug("finding port %s", port->name);
-
-    PA_IDXSET_FOREACH(card, c->cards, state)
-        if (port == pa_hashmap_get(card->ports, port->name))
-            break;
+    card = port->card;
 
     if (!card) {
-        pa_log_warn("Did not find port %s in array of cards", port->name);
+        pa_log_warn("Port %s does not have a card", port->name);
         return PA_HOOK_OK;
     }
+
+    if (pa_idxset_size(card->sinks) == 0 && pa_idxset_size(card->sources) == 0)
+        /* This card is not initialized yet. We'll handle it in
+           sink_new / source_new callbacks later. */
+        return PA_HOOK_OK;
 
     find_sink_and_source(card, port, &sink, &source);
 
@@ -163,7 +171,7 @@ static pa_hook_result_t port_available_hook_callback(pa_core *c, pa_device_port 
             return PA_HOOK_OK;
 
         if (!is_active_profile) {
-            if (!try_to_switch_profile(card, port))
+            if (try_to_switch_profile(port) < 0)
                 return PA_HOOK_OK;
 
             pa_assert(card->active_profile == pa_hashmap_get(port->profiles, card->active_profile->name));
@@ -173,27 +181,27 @@ static pa_hook_result_t port_available_hook_callback(pa_core *c, pa_device_port 
         }
 
         if (source)
-            pa_source_set_port(source, port->name, FALSE);
+            pa_source_set_port(source, port->name, false);
         if (sink)
-            pa_sink_set_port(sink, port->name, FALSE);
+            pa_sink_set_port(sink, port->name, false);
     }
 
     if (port->available == PA_AVAILABLE_NO) {
         if (sink) {
-            pa_device_port *p2 = find_best_port(sink->ports);
+            pa_device_port *p2 = pa_device_port_find_best(sink->ports);
 
             if (p2 && p2->available != PA_AVAILABLE_NO)
-                pa_sink_set_port(sink, p2->name, FALSE);
+                pa_sink_set_port(sink, p2->name, false);
             else {
                 /* Maybe try to switch to another profile? */
             }
         }
 
         if (source) {
-            pa_device_port *p2 = find_best_port(source->ports);
+            pa_device_port *p2 = pa_device_port_find_best(source->ports);
 
             if (p2 && p2->available != PA_AVAILABLE_NO)
-                pa_source_set_port(source, p2->name, FALSE);
+                pa_source_set_port(source, p2->name, false);
             else {
                 /* Maybe try to switch to another profile? */
             }
@@ -218,6 +226,51 @@ static void handle_all_unavailable(pa_core *core) {
     }
 }
 
+static pa_device_port *new_sink_source(pa_hashmap *ports, const char *name) {
+
+    void *state;
+    pa_device_port *i, *p = NULL;
+
+    if (!ports)
+        return NULL;
+    if (name)
+        p = pa_hashmap_get(ports, name);
+    if (!p)
+        PA_HASHMAP_FOREACH(i, ports, state)
+            if (!p || i->priority > p->priority)
+                p = i;
+    if (!p)
+        return NULL;
+    if (p->available != PA_AVAILABLE_NO)
+        return NULL;
+
+    pa_assert_se(p = pa_device_port_find_best(ports));
+    return p;
+}
+
+static pa_hook_result_t sink_new_hook_callback(pa_core *c, pa_sink_new_data *new_data, struct userdata *u) {
+
+    pa_device_port *p = new_sink_source(new_data->ports, new_data->active_port);
+
+    if (p) {
+        pa_log_debug("Switching initial port for sink '%s' to '%s'", new_data->name, p->name);
+        pa_sink_new_data_set_port(new_data, p->name);
+    }
+    return PA_HOOK_OK;
+}
+
+static pa_hook_result_t source_new_hook_callback(pa_core *c, pa_source_new_data *new_data, struct userdata *u) {
+
+    pa_device_port *p = new_sink_source(new_data->ports, new_data->active_port);
+
+    if (p) {
+        pa_log_debug("Switching initial port for source '%s' to '%s'", new_data->name,
+                     new_data->active_port);
+        pa_source_new_data_set_port(new_data, p->name);
+    }
+    return PA_HOOK_OK;
+}
+
 int pa__init(pa_module*m) {
     struct userdata *u;
 
@@ -225,8 +278,13 @@ int pa__init(pa_module*m) {
 
     m->userdata = u = pa_xnew(struct userdata, 1);
 
-    u->callback_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_PORT_AVAILABLE_CHANGED],
-                                       PA_HOOK_LATE, (pa_hook_cb_t) port_available_hook_callback, u);
+    /* Make sure we are after module-device-restore, so we can overwrite that suggestion if necessary */
+    u->sink_new_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_SINK_NEW],
+                                       PA_HOOK_NORMAL, (pa_hook_cb_t) sink_new_hook_callback, u);
+    u->source_new_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_SOURCE_NEW],
+                                         PA_HOOK_NORMAL, (pa_hook_cb_t) source_new_hook_callback, u);
+    u->available_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_PORT_AVAILABLE_CHANGED],
+                                        PA_HOOK_LATE, (pa_hook_cb_t) port_available_hook_callback, u);
 
     handle_all_unavailable(m->core);
 
@@ -241,8 +299,12 @@ void pa__done(pa_module*m) {
     if (!(u = m->userdata))
         return;
 
-    if (u->callback_slot)
-        pa_hook_slot_free(u->callback_slot);
+    if (u->available_slot)
+        pa_hook_slot_free(u->available_slot);
+    if (u->sink_new_slot)
+        pa_hook_slot_free(u->sink_new_slot);
+    if (u->source_new_slot)
+        pa_hook_slot_free(u->source_new_slot);
 
     pa_xfree(u);
 }

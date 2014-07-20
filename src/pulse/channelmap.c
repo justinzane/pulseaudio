@@ -199,8 +199,7 @@ pa_channel_map* pa_channel_map_init_stereo(pa_channel_map *m) {
 
 pa_channel_map* pa_channel_map_init_auto(pa_channel_map *m, unsigned channels, pa_channel_map_def_t def) {
     pa_assert(m);
-    pa_assert(channels > 0);
-    pa_assert(channels <= PA_CHANNELS_MAX);
+    pa_assert(pa_channels_valid(channels));
     pa_assert(def < PA_CHANNEL_MAP_DEF_MAX);
 
     pa_channel_map_init(m);
@@ -392,7 +391,6 @@ pa_channel_map* pa_channel_map_init_auto(pa_channel_map *m, unsigned channels, p
                     return NULL;
             }
 
-
         default:
             pa_assert_not_reached();
     }
@@ -402,8 +400,7 @@ pa_channel_map* pa_channel_map_init_extend(pa_channel_map *m, unsigned channels,
     unsigned c;
 
     pa_assert(m);
-    pa_assert(channels > 0);
-    pa_assert(channels <= PA_CHANNELS_MAX);
+    pa_assert(pa_channels_valid(channels));
     pa_assert(def < PA_CHANNEL_MAP_DEF_MAX);
 
     pa_channel_map_init(m);
@@ -471,7 +468,7 @@ int pa_channel_map_equal(const pa_channel_map *a, const pa_channel_map *b) {
 
 char* pa_channel_map_snprint(char *s, size_t l, const pa_channel_map *map) {
     unsigned channel;
-    pa_bool_t first = TRUE;
+    bool first = true;
     char *e;
 
     pa_assert(s);
@@ -493,7 +490,7 @@ char* pa_channel_map_snprint(char *s, size_t l, const pa_channel_map *map) {
                       pa_channel_position_to_string(map->map[channel]));
 
         e = strchr(e, 0);
-        first = FALSE;
+        first = false;
     }
 
     return s;
@@ -648,7 +645,7 @@ int pa_channel_map_valid(const pa_channel_map *map) {
 
     pa_assert(map);
 
-    if (map->channels <= 0 || map->channels > PA_CHANNELS_MAX)
+    if (!pa_channels_valid(map->channels))
         return 0;
 
     for (c = 0; c < map->channels; c++)
@@ -737,7 +734,7 @@ const char* pa_channel_map_to_name(const pa_channel_map *map) {
     memset(in_map, 0, sizeof(in_map));
 
     for (c = 0; c < map->channels; c++)
-        pa_bitset_set(in_map, map->map[c], TRUE);
+        pa_bitset_set(in_map, map->map[c], true);
 
     if (pa_bitset_equals(in_map, PA_CHANNEL_POSITION_MAX,
                          PA_CHANNEL_POSITION_MONO, -1))
@@ -811,7 +808,7 @@ const char* pa_channel_map_to_pretty_name(const pa_channel_map *map) {
     memset(in_map, 0, sizeof(in_map));
 
     for (c = 0; c < map->channels; c++)
-        pa_bitset_set(in_map, map->map[c], TRUE);
+        pa_bitset_set(in_map, map->map[c], true);
 
     pa_init_i18n();
 

@@ -46,6 +46,7 @@ typedef unsigned long nfds_t;
 # include <io.h>
 # include <stdio.h>
 # include <conio.h>
+# include <signal.h>
 # if 0
 # include "msvc-nothrow.h"
 # endif
@@ -64,6 +65,8 @@ typedef unsigned long nfds_t;
 #endif
 
 #include <time.h>
+
+#include <pulsecore/core-util.h>
 
 #ifndef INFTIM
 # define INFTIM (-1)
@@ -348,8 +351,9 @@ int
 pa_poll (struct pollfd *pfd, nfds_t nfd, int timeout)
 {
   struct timeval tv;
-  struct timeval *ptv;
+
 #ifndef WINDOWS_NATIVE
+  struct timeval *ptv;
   fd_set rfds, wfds, efds;
   int maxfd, rc;
   nfds_t i;
@@ -374,17 +378,6 @@ pa_poll (struct pollfd *pfd, nfds_t nfd, int timeout)
     }
 #  endif /* OPEN_MAX -- else, no check is needed */
 # endif /* !_SC_OPEN_MAX */
-#else /* WINDOWS_NATIVE*/
-  static HANDLE hEvent;
-  WSANETWORKEVENTS ev;
-  HANDLE h, handle_array[FD_SETSIZE + 2];
-  DWORD ret, wait_timeout, nhandles;
-  fd_set rfds, wfds, xfds;
-  BOOL poll_again;
-  MSG msg;
-  int rc = 0;
-  nfds_t i;
-#endif
 
   /* EFAULT is not necessary to implement, but let's do it in the
      simplest case. */
@@ -416,7 +409,6 @@ pa_poll (struct pollfd *pfd, nfds_t nfd, int timeout)
       return -1;
     }
 
-#ifndef WINDOWS_NATIVE
   /* create fd sets and determine max fd */
   maxfd = -1;
   FD_ZERO (&rfds);
@@ -473,10 +465,18 @@ pa_poll (struct pollfd *pfd, nfds_t nfd, int timeout)
       }
 
   return rc;
-#else
+#else /* WINDOWS_NATIVE*/
+  HANDLE hEvent;
+  WSANETWORKEVENTS ev;
+  HANDLE h, handle_array[FD_SETSIZE + 2];
+  DWORD ret, wait_timeout, nhandles;
+  fd_set rfds, wfds, xfds;
+  BOOL poll_again;
+  MSG msg;
+  int rc = 0;
+  nfds_t i;
 
-  if (!hEvent)
-    hEvent = CreateEvent (NULL, FALSE, FALSE, NULL);
+  hEvent = CreateEvent (NULL, FALSE, FALSE, NULL);
 
 restart:
   handle_array[0] = hEvent;
@@ -533,19 +533,16 @@ restart:
             handle_array[nhandles++] = h;
           if (pfd[i].revents)
             timeout = 0;
-          else
-            {
-              if (!ptv)
-                ptv = &tv;
-              /* tune down to 0.25s. But don't touch smaller timeouts */
-              if (ptv->tv_usec > 250*1000 || ptv->tv_sec > 0)
-                ptv->tv_usec = 250*1000;
-              ptv->tv_sec = 0;
-            }
         }
     }
 
-  if (select (0, &rfds, &wfds, &xfds, ptv) > 0)
+  /* We poll current status using select(). It cannot be used to check
+     anything but sockets, so we still have to wait in
+     MsgWaitForMultipleObjects(). But that in turn cannot check existing
+     state, so we can't remove this select(). */
+  /* FIXME: MSDN states that we cannot give empty fd_set:s. */
+  tv.tv_sec = tv.tv_usec = 0;
+  if (select (0, &rfds, &wfds, &xfds, &tv) > 0)
     {
       /* Do MsgWaitForMultipleObjects anyway to dispatch messages, but
          no need to call select again.  */
@@ -572,8 +569,13 @@ restart:
           BOOL bRet;
           while ((bRet = PeekMessage (&msg, NULL, 0, 0, PM_REMOVE)) != 0)
             {
-              TranslateMessage (&msg);
-              DispatchMessage (&msg);
+              if (msg.message == WM_QUIT)
+                  raise(SIGTERM);
+              else
+                {
+                  TranslateMessage (&msg);
+                  DispatchMessage (&msg);
+                }
             }
         }
       else
@@ -581,7 +583,7 @@ restart:
     }
 
   if (poll_again)
-    select (0, &rfds, &wfds, &xfds, ptv);
+    select (0, &rfds, &wfds, &xfds, &tv);
 
   /* Place a sentinel at the end of the array.  */
   handle_array[nhandles] = NULL;
@@ -602,6 +604,9 @@ restart:
           /* It's a socket.  */
           WSAEnumNetworkEvents ((SOCKET) h, NULL, &ev);
           WSAEventSelect ((SOCKET) h, 0, 0);
+          /* Have to restore blocking as WSAEventSelect() clears it */
+          if (!pa_is_fd_nonblock(pfd[i].fd))
+            pa_make_fd_block(pfd[i].fd);
 
           /* If we're lucky, WSAEnumNetworkEvents already provided a way
              to distinguish FD_READ and FD_ACCEPT; this saves a recv later.  */
@@ -633,6 +638,8 @@ restart:
       SleepEx (1, TRUE);
       goto restart;
     }
+
+  CloseHandle(hEvent);
 
   return rc;
 #endif

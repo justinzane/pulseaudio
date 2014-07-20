@@ -42,7 +42,7 @@ struct pa_auth_cookie {
     size_t size;
 };
 
-pa_auth_cookie* pa_auth_cookie_get(pa_core *core, const char *cn, pa_bool_t create, size_t size) {
+pa_auth_cookie* pa_auth_cookie_get(pa_core *core, const char *cn, bool create, size_t size) {
     pa_auth_cookie *c;
     char *t;
 
@@ -69,10 +69,43 @@ pa_auth_cookie* pa_auth_cookie_get(pa_core *core, const char *cn, pa_bool_t crea
 
     pa_assert_se(pa_shared_set(core, t, c) >= 0);
 
-    if (pa_authkey_load_auto(cn, create, (uint8_t*) c + PA_ALIGN(sizeof(pa_auth_cookie)), size) < 0) {
+    if (pa_authkey_load(cn, create, (uint8_t*) c + PA_ALIGN(sizeof(pa_auth_cookie)), size) < 0) {
         pa_auth_cookie_unref(c);
         return NULL;
     }
+
+    return c;
+}
+
+pa_auth_cookie *pa_auth_cookie_create(pa_core *core, const void *data, size_t size) {
+    pa_auth_cookie *c;
+    char *t;
+
+    pa_assert(core);
+    pa_assert(data);
+    pa_assert(size > 0);
+
+    t = pa_xstrdup("auth-cookie");
+
+    if ((c = pa_shared_get(core, t))) {
+
+        pa_xfree(t);
+
+        if (c->size != size)
+            return NULL;
+
+        return pa_auth_cookie_ref(c);
+    }
+
+    c = pa_xmalloc(PA_ALIGN(sizeof(pa_auth_cookie)) + size);
+    PA_REFCNT_INIT(c);
+    c->core = core;
+    c->name = t;
+    c->size = size;
+
+    pa_assert_se(pa_shared_set(core, t, c) >= 0);
+
+    memcpy((uint8_t *) c + PA_ALIGN(sizeof(pa_auth_cookie)), data, size);
 
     return c;
 }

@@ -39,10 +39,12 @@ struct pa_cond {
     pthread_cond_t cond;
 };
 
-pa_mutex* pa_mutex_new(pa_bool_t recursive, pa_bool_t inherit_priority) {
+pa_mutex* pa_mutex_new(bool recursive, bool inherit_priority) {
     pa_mutex *m;
     pthread_mutexattr_t attr;
+#ifdef HAVE_PTHREAD_PRIO_INHERIT
     int r;
+#endif
 
     pa_assert_se(pthread_mutexattr_init(&attr) == 0);
 
@@ -90,16 +92,16 @@ void pa_mutex_lock(pa_mutex *m) {
     pa_assert_se(pthread_mutex_lock(&m->mutex) == 0);
 }
 
-pa_bool_t pa_mutex_try_lock(pa_mutex *m) {
+bool pa_mutex_try_lock(pa_mutex *m) {
     int r;
     pa_assert(m);
 
     if ((r = pthread_mutex_trylock(&m->mutex)) != 0) {
         pa_assert(r == EBUSY);
-        return FALSE;
+        return false;
     }
 
-    return TRUE;
+    return true;
 }
 
 void pa_mutex_unlock(pa_mutex *m) {
@@ -139,7 +141,7 @@ int pa_cond_wait(pa_cond *c, pa_mutex *m) {
     return pthread_cond_wait(&c->cond, &m->mutex);
 }
 
-pa_mutex* pa_static_mutex_get(pa_static_mutex *s, pa_bool_t recursive, pa_bool_t inherit_priority) {
+pa_mutex* pa_static_mutex_get(pa_static_mutex *s, bool recursive, bool inherit_priority) {
     pa_mutex *m;
 
     pa_assert(s);

@@ -58,7 +58,7 @@
 PA_MODULE_AUTHOR("Wim Taymans");
 PA_MODULE_DESCRIPTION("Echo Cancellation");
 PA_MODULE_VERSION(PACKAGE_VERSION);
-PA_MODULE_LOAD_ONCE(FALSE);
+PA_MODULE_LOAD_ONCE(false);
 PA_MODULE_USAGE(
         _("source_name=<name for the source> "
           "source_properties=<properties for the source> "
@@ -140,8 +140,8 @@ static const pa_echo_canceller ec_table[] = {
 #define DEFAULT_CHANNELS 1
 #define DEFAULT_ADJUST_TIME_USEC (1*PA_USEC_PER_SEC)
 #define DEFAULT_ADJUST_TOLERANCE (5*PA_USEC_PER_MSEC)
-#define DEFAULT_SAVE_AEC FALSE
-#define DEFAULT_AUTOLOADED FALSE
+#define DEFAULT_SAVE_AEC false
+#define DEFAULT_AUTOLOADED false
 
 #define MEMBLOCKQ_MAXLENGTH (16*1024*1024)
 
@@ -206,29 +206,29 @@ struct userdata {
     pa_core *core;
     pa_module *module;
 
-    pa_bool_t autoloaded;
-    pa_bool_t dead;
-    pa_bool_t save_aec;
+    bool autoloaded;
+    bool dead;
+    bool save_aec;
 
     pa_echo_canceller *ec;
     uint32_t source_output_blocksize;
     uint32_t source_blocksize;
     uint32_t sink_blocksize;
 
-    pa_bool_t need_realign;
+    bool need_realign;
 
     /* to wakeup the source I/O thread */
     pa_asyncmsgq *asyncmsgq;
     pa_rtpoll_item *rtpoll_item_read, *rtpoll_item_write;
 
     pa_source *source;
-    pa_bool_t source_auto_desc;
+    bool source_auto_desc;
     pa_source_output *source_output;
     pa_memblockq *source_memblockq; /* echo canceler needs fixed sized chunks */
     size_t source_skip;
 
     pa_sink *sink;
-    pa_bool_t sink_auto_desc;
+    bool sink_auto_desc;
     pa_sink_input *sink_input;
     pa_memblockq *sink_memblockq;
     int64_t send_counter;          /* updated in sink IO thread */
@@ -250,7 +250,7 @@ struct userdata {
     FILE *canceled_file;
     FILE *drift_file;
 
-    pa_bool_t use_volume_sharing;
+    bool use_volume_sharing;
 
     struct {
         pa_cvolume current_volume;
@@ -312,8 +312,8 @@ static int64_t calc_diff(struct userdata *u, struct snapshot *snapshot) {
     buffer_latency += source_delay + sink_delay;
 
     /* add the latency difference due to samples not yet transferred */
-    send_counter = pa_bytes_to_usec(snapshot->send_counter, &u->sink_input->sample_spec);
-    recv_counter = pa_bytes_to_usec(snapshot->recv_counter, &u->source_output->sample_spec);
+    send_counter = pa_bytes_to_usec(snapshot->send_counter, &u->sink->sample_spec);
+    recv_counter = pa_bytes_to_usec(snapshot->recv_counter, &u->sink->sample_spec);
     if (recv_counter <= send_counter)
         buffer_latency += (int64_t) (send_counter - recv_counter);
     else
@@ -462,7 +462,6 @@ static int sink_process_msg_cb(pa_msgobject *o, int code, void *data, int64_t of
     return pa_sink_process_msg(o, code, data, offset, chunk);
 }
 
-
 /* Called from main context */
 static int source_set_state_cb(pa_source *s, pa_source_state_t state) {
     struct userdata *u;
@@ -480,9 +479,9 @@ static int source_set_state_cb(pa_source *s, pa_source_state_t state) {
             pa_core_rttime_restart(u->core, u->time_event, pa_rtclock_now() + u->adjust_time);
 
         pa_atomic_store(&u->request_resync, 1);
-        pa_source_output_cork(u->source_output, FALSE);
+        pa_source_output_cork(u->source_output, false);
     } else if (state == PA_SOURCE_SUSPENDED) {
-        pa_source_output_cork(u->source_output, TRUE);
+        pa_source_output_cork(u->source_output, true);
     }
 
     return 0;
@@ -505,9 +504,9 @@ static int sink_set_state_cb(pa_sink *s, pa_sink_state_t state) {
             pa_core_rttime_restart(u->core, u->time_event, pa_rtclock_now() + u->adjust_time);
 
         pa_atomic_store(&u->request_resync, 1);
-        pa_sink_input_cork(u->sink_input, FALSE);
+        pa_sink_input_cork(u->sink_input, false);
     } else if (state == PA_SINK_SUSPENDED) {
-        pa_sink_input_cork(u->sink_input, TRUE);
+        pa_sink_input_cork(u->sink_input, true);
     }
 
     return 0;
@@ -566,7 +565,7 @@ static void sink_request_rewind_cb(pa_sink *s) {
 
     /* Just hand this one over to the master sink */
     pa_sink_input_request_rewind(u->sink_input,
-                                 s->thread_info.rewind_nbytes, TRUE, FALSE, FALSE);
+                                 s->thread_info.rewind_nbytes, true, false, false);
 }
 
 /* Called from main context */
@@ -580,7 +579,7 @@ static void source_set_volume_cb(pa_source *s) {
         !PA_SOURCE_OUTPUT_IS_LINKED(pa_source_output_get_state(u->source_output)))
         return;
 
-    pa_source_output_set_volume(u->source_output, &s->real_volume, s->save_volume, TRUE);
+    pa_source_output_set_volume(u->source_output, &s->real_volume, s->save_volume, true);
 }
 
 /* Called from main context */
@@ -594,7 +593,7 @@ static void sink_set_volume_cb(pa_sink *s) {
         !PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(u->sink_input)))
         return;
 
-    pa_sink_input_set_volume(u->sink_input, &s->real_volume, s->save_volume, TRUE);
+    pa_sink_input_set_volume(u->sink_input, &s->real_volume, s->save_volume, true);
 }
 
 /* Called from main context. */
@@ -609,7 +608,7 @@ static void source_get_volume_cb(pa_source *s) {
         !PA_SOURCE_OUTPUT_IS_LINKED(pa_source_output_get_state(u->source_output)))
         return;
 
-    pa_source_output_get_volume(u->source_output, &v, TRUE);
+    pa_source_output_get_volume(u->source_output, &v, true);
 
     if (pa_cvolume_equal(&s->real_volume, &v))
         /* no change */
@@ -645,20 +644,6 @@ static void sink_set_mute_cb(pa_sink *s) {
         return;
 
     pa_sink_input_set_mute(u->sink_input, s->muted, s->save_muted);
-}
-
-/* Called from main context */
-static void source_get_mute_cb(pa_source *s) {
-    struct userdata *u;
-
-    pa_source_assert_ref(s);
-    pa_assert_se(u = s->userdata);
-
-    if (!PA_SOURCE_IS_LINKED(pa_source_get_state(s)) ||
-        !PA_SOURCE_OUTPUT_IS_LINKED(pa_source_output_get_state(u->source_output)))
-        return;
-
-    pa_source_output_get_mute(u->source_output);
 }
 
 /* Called from source I/O thread context. */
@@ -1004,7 +989,7 @@ static void source_output_process_rewind_cb(pa_source_output *o, size_t nbytes) 
     pa_memblockq_rewind(u->sink_memblockq, nbytes);
 
     /* manipulate write index */
-    pa_memblockq_seek(u->source_memblockq, -nbytes, PA_SEEK_RELATIVE, TRUE);
+    pa_memblockq_seek(u->source_memblockq, -nbytes, PA_SEEK_RELATIVE, true);
 
     pa_log_debug("Source rewind (%lld) %lld", (long long) nbytes,
         (long long) pa_memblockq_get_length (u->source_memblockq));
@@ -1059,7 +1044,7 @@ static int source_output_process_msg_cb(pa_msgobject *obj, int code, void *data,
             if (u->source_output->source->thread_info.state == PA_SOURCE_RUNNING)
                 pa_memblockq_push_align(u->sink_memblockq, chunk);
             else
-                pa_memblockq_flush_write(u->sink_memblockq, TRUE);
+                pa_memblockq_flush_write(u->sink_memblockq, true);
 
             u->recv_counter += (int64_t) chunk->length;
 
@@ -1070,9 +1055,9 @@ static int source_output_process_msg_cb(pa_msgobject *obj, int code, void *data,
 
             /* manipulate write index, never go past what we have */
             if (PA_SOURCE_IS_OPENED(u->source_output->source->thread_info.state))
-                pa_memblockq_seek(u->sink_memblockq, -offset, PA_SEEK_RELATIVE, TRUE);
+                pa_memblockq_seek(u->sink_memblockq, -offset, PA_SEEK_RELATIVE, true);
             else
-                pa_memblockq_flush_write(u->sink_memblockq, TRUE);
+                pa_memblockq_flush_write(u->sink_memblockq, true);
 
             pa_log_debug("Sink rewind (%lld)", (long long) offset);
 
@@ -1301,7 +1286,6 @@ static void sink_input_attach_cb(pa_sink_input *i) {
     pa_sink_attach_within_thread(u->sink);
 }
 
-
 /* Called from source I/O thread context. */
 static void source_output_detach_cb(pa_source_output *o) {
     struct userdata *u;
@@ -1365,7 +1349,7 @@ static void sink_input_state_change_cb(pa_sink_input *i, pa_sink_input_state_t s
     if (PA_SINK_INPUT_IS_LINKED(state) &&
         i->thread_info.state == PA_SINK_INPUT_INIT) {
         pa_log_debug("Requesting rewind due to state change.");
-        pa_sink_input_request_rewind(i, 0, FALSE, TRUE, TRUE);
+        pa_sink_input_request_rewind(i, 0, false, true, true);
     }
 }
 
@@ -1377,7 +1361,7 @@ static void source_output_kill_cb(pa_source_output *o) {
     pa_assert_ctl_context();
     pa_assert_se(u = o->userdata);
 
-    u->dead = TRUE;
+    u->dead = true;
 
     /* The order here matters! We first kill the source output, followed
      * by the source. That means the source callbacks must be protected
@@ -1393,7 +1377,7 @@ static void source_output_kill_cb(pa_source_output *o) {
 
     pa_log_debug("Source output kill %d", o->index);
 
-    pa_module_unload_request(u->module, TRUE);
+    pa_module_unload_request(u->module, true);
 }
 
 /* Called from main context */
@@ -1403,7 +1387,7 @@ static void sink_input_kill_cb(pa_sink_input *i) {
     pa_sink_input_assert_ref(i);
     pa_assert_se(u = i->userdata);
 
-    u->dead = TRUE;
+    u->dead = true;
 
     /* The order here matters! We first kill the sink input, followed
      * by the sink. That means the sink callbacks must be protected
@@ -1419,11 +1403,11 @@ static void sink_input_kill_cb(pa_sink_input *i) {
 
     pa_log_debug("Sink input kill %d", i->index);
 
-    pa_module_unload_request(u->module, TRUE);
+    pa_module_unload_request(u->module, true);
 }
 
 /* Called from main context. */
-static pa_bool_t source_output_may_move_to_cb(pa_source_output *o, pa_source *dest) {
+static bool source_output_may_move_to_cb(pa_source_output *o, pa_source *dest) {
     struct userdata *u;
 
     pa_source_output_assert_ref(o);
@@ -1431,20 +1415,20 @@ static pa_bool_t source_output_may_move_to_cb(pa_source_output *o, pa_source *de
     pa_assert_se(u = o->userdata);
 
     if (u->dead || u->autoloaded)
-        return FALSE;
+        return false;
 
     return (u->source != dest) && (u->sink != dest->monitor_of);
 }
 
 /* Called from main context */
-static pa_bool_t sink_input_may_move_to_cb(pa_sink_input *i, pa_sink *dest) {
+static bool sink_input_may_move_to_cb(pa_sink_input *i, pa_sink *dest) {
     struct userdata *u;
 
     pa_sink_input_assert_ref(i);
     pa_assert_se(u = i->userdata);
 
     if (u->dead || u->autoloaded)
-        return FALSE;
+        return false;
 
     return u->sink != dest;
 }
@@ -1541,9 +1525,9 @@ static int canceller_process_msg_cb(pa_msgobject *o, int code, void *userdata, i
             pa_cvolume *v = (pa_cvolume *) userdata;
 
             if (u->use_volume_sharing)
-                pa_source_set_volume(u->source, v, TRUE, FALSE);
+                pa_source_set_volume(u->source, v, true, false);
             else
-                pa_source_output_set_volume(u->source_output, v, FALSE, TRUE);
+                pa_source_output_set_volume(u->source_output, v, false, true);
 
             break;
         }
@@ -1700,9 +1684,9 @@ int pa__init(pa_module*m) {
     u->core = m->core;
     u->module = m;
     m->userdata = u;
-    u->dead = FALSE;
+    u->dead = false;
 
-    u->use_volume_sharing = TRUE;
+    u->use_volume_sharing = true;
     if (pa_modargs_get_value_boolean(ma, "use_volume_sharing", &u->use_volume_sharing) < 0) {
         pa_log("use_volume_sharing= expects a boolean argument");
         goto fail;
@@ -1746,7 +1730,7 @@ int pa__init(pa_module*m) {
         goto fail;
 
     u->asyncmsgq = pa_asyncmsgq_new(0);
-    u->need_realign = TRUE;
+    u->need_realign = true;
 
     source_output_ss = source_ss;
     source_output_map = source_map;
@@ -1812,12 +1796,11 @@ int pa__init(pa_module*m) {
     u->source->parent.process_msg = source_process_msg_cb;
     u->source->set_state = source_set_state_cb;
     u->source->update_requested_latency = source_update_requested_latency_cb;
-    pa_source_set_get_mute_callback(u->source, source_get_mute_cb);
     pa_source_set_set_mute_callback(u->source, source_set_mute_cb);
     if (!u->use_volume_sharing) {
         pa_source_set_get_volume_callback(u->source, source_get_volume_cb);
         pa_source_set_set_volume_callback(u->source, source_set_volume_cb);
-        pa_source_enable_decibel_volume(u->source, TRUE);
+        pa_source_enable_decibel_volume(u->source, true);
     }
     u->source->userdata = u;
 
@@ -1867,7 +1850,7 @@ int pa__init(pa_module*m) {
     pa_sink_set_set_mute_callback(u->sink, sink_set_mute_cb);
     if (!u->use_volume_sharing) {
         pa_sink_set_set_volume_callback(u->sink, sink_set_volume_cb);
-        pa_sink_enable_decibel_volume(u->sink, TRUE);
+        pa_sink_enable_decibel_volume(u->sink, true);
     }
     u->sink->userdata = u;
 
@@ -1877,7 +1860,7 @@ int pa__init(pa_module*m) {
     pa_source_output_new_data_init(&source_output_data);
     source_output_data.driver = __FILE__;
     source_output_data.module = m;
-    pa_source_output_new_data_set_source(&source_output_data, source_master, FALSE);
+    pa_source_output_new_data_set_source(&source_output_data, source_master, false);
     source_output_data.destination_source = u->source;
 
     pa_proplist_sets(source_output_data.proplist, PA_PROP_MEDIA_NAME, "Echo-Cancel Source Stream");
@@ -1912,7 +1895,7 @@ int pa__init(pa_module*m) {
     pa_sink_input_new_data_init(&sink_input_data);
     sink_input_data.driver = __FILE__;
     sink_input_data.module = m;
-    pa_sink_input_new_data_set_sink(&sink_input_data, sink_master, FALSE);
+    pa_sink_input_new_data_set_sink(&sink_input_data, sink_master, false);
     sink_input_data.origin_sink = u->sink;
     pa_proplist_sets(sink_input_data.proplist, PA_PROP_MEDIA_NAME, "Echo-Cancel Sink Stream");
     pa_proplist_sets(sink_input_data.proplist, PA_PROP_MEDIA_ROLE, "filter");
@@ -2031,7 +2014,7 @@ void pa__done(pa_module*m) {
     if (!(u = m->userdata))
         return;
 
-    u->dead = TRUE;
+    u->dead = true;
 
     /* See comments in source_output_kill_cb() above regarding
      * destruction order! */

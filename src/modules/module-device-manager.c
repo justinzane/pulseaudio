@@ -56,7 +56,7 @@
 PA_MODULE_AUTHOR("Colin Guthrie");
 PA_MODULE_DESCRIPTION("Keep track of devices (and their descriptions) both past and present and prioritise by role");
 PA_MODULE_VERSION(PACKAGE_VERSION);
-PA_MODULE_LOAD_ONCE(TRUE);
+PA_MODULE_LOAD_ONCE(true);
 PA_MODULE_USAGE(
     "do_routing=<Automatically route streams based on a priority list (unique per-role)?> "
     "on_hotplug=<When new device becomes available, recheck streams?> "
@@ -120,9 +120,9 @@ struct userdata {
     pa_native_protocol *protocol;
     pa_idxset *subscribed;
 
-    pa_bool_t on_hotplug;
-    pa_bool_t on_rescue;
-    pa_bool_t do_routing;
+    bool on_hotplug;
+    bool on_rescue;
+    bool do_routing;
 
     role_indexes_t preferred_sinks;
     role_indexes_t preferred_sources;
@@ -133,7 +133,7 @@ struct userdata {
 struct entry {
     uint8_t version;
     char *description;
-    pa_bool_t user_set_description;
+    bool user_set_description;
     char *icon;
     role_indexes_t priority;
 };
@@ -149,13 +149,11 @@ enum {
     SUBCOMMAND_EVENT
 };
 
-
 /* Forward declarations */
 #ifdef DUMP_DATABASE
 static void dump_database(struct userdata *);
 #endif
 static void notify_subscribers(struct userdata *);
-
 
 static void save_time_callback(pa_mainloop_api*a, pa_time_event* e, const struct timeval *t, void *userdata) {
     struct userdata *u = userdata;
@@ -202,10 +200,10 @@ static void entry_free(struct entry* e) {
     pa_xfree(e);
 }
 
-static pa_bool_t entry_write(struct userdata *u, const char *name, const struct entry *e) {
+static bool entry_write(struct userdata *u, const char *name, const struct entry *e) {
     pa_tagstruct *t;
     pa_datum key, data;
-    pa_bool_t r;
+    bool r;
 
     pa_assert(u);
     pa_assert(name);
@@ -224,7 +222,7 @@ static pa_bool_t entry_write(struct userdata *u, const char *name, const struct 
 
     data.data = (void*)pa_tagstruct_data(t, &data.size);
 
-    r = (pa_database_set(u->database, &key, &data, TRUE) == 0);
+    r = (pa_database_set(u->database, &key, &data, true) == 0);
 
     pa_tagstruct_free(t);
 
@@ -238,7 +236,7 @@ static struct entry* legacy_entry_read(struct userdata *u, pa_datum *data) {
     struct legacy_entry {
         uint8_t version;
         char description[PA_NAME_MAX];
-        pa_bool_t user_set_description;
+        bool user_set_description;
         char icon[PA_NAME_MAX];
         role_indexes_t priority;
     } PA_GCC_PACKED;
@@ -262,6 +260,11 @@ static struct entry* legacy_entry_read(struct userdata *u, pa_datum *data) {
 
     if (!memchr(le->description, 0, sizeof(le->description))) {
         pa_log_warn("Description has missing NUL byte.");
+        return NULL;
+    }
+
+    if (!le->description[0]) {
+        pa_log_warn("Description is empty.");
         return NULL;
     }
 
@@ -306,6 +309,16 @@ static struct entry* entry_read(struct userdata *u, const char *name) {
         goto fail;
     }
 
+    if (e->user_set_description && !description) {
+        pa_log("Entry has user_set_description set, but the description is NULL.");
+        goto fail;
+    }
+
+    if (e->user_set_description && !*description) {
+        pa_log("Entry has user_set_description set, but the description is empty.");
+        goto fail;
+    }
+
     e->description = pa_xstrdup(description);
     e->icon = pa_xstrdup(icon);
 
@@ -347,7 +360,7 @@ fail:
 }
 
 #ifdef DUMP_DATABASE
-static void dump_database_helper(struct userdata *u, uint32_t role_index, const char* human, pa_bool_t sink_mode) {
+static void dump_database_helper(struct userdata *u, uint32_t role_index, const char* human, bool sink_mode) {
     pa_assert(u);
     pa_assert(human);
 
@@ -368,7 +381,7 @@ static void dump_database_helper(struct userdata *u, uint32_t role_index, const 
 
 static void dump_database(struct userdata *u) {
     pa_datum key;
-    pa_bool_t done;
+    bool done;
 
     pa_assert(u);
 
@@ -410,7 +423,7 @@ static void dump_database(struct userdata *u) {
             strncpy(name, role_names[role], len);
             for (int i = len+1; i < 12; ++i) name[i] = ' ';
             name[len] = ':'; name[0] -= 32; name[12] = '\0';
-            dump_database_helper(u, role, name, TRUE);
+            dump_database_helper(u, role, name, true);
         }
 
         pa_log_debug("  Sources:");
@@ -420,7 +433,7 @@ static void dump_database(struct userdata *u) {
             strncpy(name, role_names[role], len);
             for (int i = len+1; i < 12; ++i) name[i] = ' ';
             name[len] = ':'; name[0] -= 32; name[12] = '\0';
-            dump_database_helper(u, role, name, FALSE);
+            dump_database_helper(u, role, name, false);
         }
     }
 
@@ -449,7 +462,7 @@ static void notify_subscribers(struct userdata *u) {
     }
 }
 
-static pa_bool_t entries_equal(const struct entry *a, const struct entry *b) {
+static bool entries_equal(const struct entry *a, const struct entry *b) {
 
     pa_assert(a);
     pa_assert(b);
@@ -457,13 +470,13 @@ static pa_bool_t entries_equal(const struct entry *a, const struct entry *b) {
     if (!pa_streq(a->description, b->description)
         || a->user_set_description != b->user_set_description
         || !pa_streq(a->icon, b->icon))
-        return FALSE;
+        return false;
 
     for (int i=0; i < NUM_ROLES; ++i)
         if (a->priority[i] != b->priority[i])
-            return FALSE;
+            return false;
 
-    return TRUE;
+    return true;
 }
 
 static char *get_name(const char *key, const char *prefix) {
@@ -489,10 +502,10 @@ static inline struct entry *load_or_initialize_entry(struct userdata *u, struct 
         entry->description = pa_xstrdup(old->description);
         entry->icon = pa_xstrdup(old->icon);
     } else {
-        /* This is a new device, so make sure we write it's priority list correctly */
+        /* This is a new device, so make sure we write its priority list correctly */
         role_indexes_t max_priority;
         pa_datum key;
-        pa_bool_t done;
+        bool done;
 
         pa_zero(max_priority);
         done = !pa_database_first(u->database, &key, NULL);
@@ -527,7 +540,7 @@ static inline struct entry *load_or_initialize_entry(struct userdata *u, struct 
         for (uint32_t i = 0; i < NUM_ROLES; ++i) {
             entry->priority[i] = max_priority[i] + 1;
         }
-        entry->user_set_description = FALSE;
+        entry->user_set_description = false;
     }
 
     return old;
@@ -546,7 +559,7 @@ static uint32_t get_role_index(const char* role) {
 static void update_highest_priority_device_indexes(struct userdata *u, const char *prefix, void *ignore_device) {
     role_indexes_t *indexes, highest_priority_available;
     pa_datum key;
-    pa_bool_t done, sink_mode;
+    bool done, sink_mode;
 
     pa_assert(u);
     pa_assert(prefix);
@@ -584,7 +597,7 @@ static void update_highest_priority_device_indexes(struct userdata *u, const cha
                         /* We've found a device with a higher priority than that we've currently got,
                            so see if it is currently available or not and update our list */
                         uint32_t idx;
-                        pa_bool_t found = FALSE;
+                        bool found = false;
 
                         if (sink_mode) {
                             pa_sink *sink;
@@ -592,8 +605,10 @@ static void update_highest_priority_device_indexes(struct userdata *u, const cha
                             PA_IDXSET_FOREACH(sink, u->core->sinks, idx) {
                                 if ((pa_sink*) ignore_device == sink)
                                     continue;
+                                if (!PA_SINK_IS_LINKED(sink->state))
+                                    continue;
                                 if (pa_streq(sink->name, device_name)) {
-                                    found = TRUE;
+                                    found = true;
                                     idx = sink->index; /* Is this needed? */
                                     break;
                                 }
@@ -604,8 +619,10 @@ static void update_highest_priority_device_indexes(struct userdata *u, const cha
                             PA_IDXSET_FOREACH(source, u->core->sources, idx) {
                                 if ((pa_source*) ignore_device == source)
                                     continue;
+                                if (!PA_SOURCE_IS_LINKED(source->state))
+                                    continue;
                                 if (pa_streq(source->name, device_name)) {
-                                    found = TRUE;
+                                    found = true;
                                     idx = source->index; /* Is this needed? */
                                     break;
                                 }
@@ -630,7 +647,6 @@ static void update_highest_priority_device_indexes(struct userdata *u, const cha
         key = next_key;
     }
 }
-
 
 static void route_sink_input(struct userdata *u, pa_sink_input *si) {
     const char *role;
@@ -669,7 +685,7 @@ static void route_sink_input(struct userdata *u, pa_sink_input *si) {
         return;
 
     if (si->sink != sink)
-        pa_sink_input_move_to(si, sink, FALSE);
+        pa_sink_input_move_to(si, sink, false);
 }
 
 static pa_hook_result_t route_sink_inputs(struct userdata *u, pa_sink *ignore_sink) {
@@ -730,7 +746,7 @@ static void route_source_output(struct userdata *u, pa_source_output *so) {
         return;
 
     if (so->source != source)
-        pa_source_output_move_to(so, source, FALSE);
+        pa_source_output_move_to(so, source, false);
 }
 
 static pa_hook_result_t route_source_outputs(struct userdata *u, pa_source* ignore_source) {
@@ -889,7 +905,7 @@ static pa_hook_result_t sink_new_hook_callback(pa_core *c, pa_sink_new_data *new
     name = pa_sprintf_malloc("sink:%s", new_data->name);
 
     if ((e = entry_read(u, name))) {
-        if (e->user_set_description && strncmp(e->description, pa_proplist_gets(new_data->proplist, PA_PROP_DEVICE_DESCRIPTION), sizeof(e->description)) != 0) {
+        if (e->user_set_description && !pa_safe_streq(e->description, pa_proplist_gets(new_data->proplist, PA_PROP_DEVICE_DESCRIPTION))) {
             pa_log_info("Restoring description for sink %s.", new_data->name);
             pa_proplist_sets(new_data->proplist, PA_PROP_DEVICE_DESCRIPTION, e->description);
         }
@@ -913,7 +929,7 @@ static pa_hook_result_t source_new_hook_callback(pa_core *c, pa_source_new_data 
     name = pa_sprintf_malloc("source:%s", new_data->name);
 
     if ((e = entry_read(u, name))) {
-        if (e->user_set_description && strncmp(e->description, pa_proplist_gets(new_data->proplist, PA_PROP_DEVICE_DESCRIPTION), sizeof(e->description)) != 0) {
+        if (e->user_set_description && !pa_safe_streq(e->description, pa_proplist_gets(new_data->proplist, PA_PROP_DEVICE_DESCRIPTION))) {
             /* NB, We cannot detect if we are a monitor here... this could mess things up a bit... */
             pa_log_info("Restoring description for source %s.", new_data->name);
             pa_proplist_sets(new_data->proplist, PA_PROP_DEVICE_DESCRIPTION, e->description);
@@ -954,7 +970,7 @@ static pa_hook_result_t sink_input_new_hook_callback(pa_core *c, pa_sink_input_n
                 pa_sink *sink;
 
                 if ((sink = pa_idxset_get_by_index(u->core->sinks, device_index))) {
-                    if (!pa_sink_input_new_data_set_sink(new_data, sink, FALSE))
+                    if (!pa_sink_input_new_data_set_sink(new_data, sink, false))
                         pa_log_debug("Not restoring device for stream because no supported format was found");
                 }
             }
@@ -994,7 +1010,7 @@ static pa_hook_result_t source_output_new_hook_callback(pa_core *c, pa_source_ou
                 pa_source *source;
 
                 if ((source = pa_idxset_get_by_index(u->core->sources, device_index)))
-                    if (!pa_source_output_new_data_set_source(new_data, source, FALSE))
+                    if (!pa_source_output_new_data_set_source(new_data, source, false))
                         pa_log_debug("Not restoring device for stream because no supported format was found");
             }
         }
@@ -1002,7 +1018,6 @@ static pa_hook_result_t source_output_new_hook_callback(pa_core *c, pa_source_ou
 
     return PA_HOOK_OK;
 }
-
 
 static pa_hook_result_t sink_put_hook_callback(pa_core *c, PA_GCC_UNUSED pa_sink *sink, struct userdata *u) {
     pa_assert(c);
@@ -1058,7 +1073,6 @@ static pa_hook_result_t source_unlink_hook_callback(pa_core *c, pa_source *sourc
     return route_source_outputs(u, source);
 }
 
-
 static void apply_entry(struct userdata *u, const char *name, struct entry *e) {
     uint32_t idx;
     char *n;
@@ -1101,7 +1115,6 @@ static void apply_entry(struct userdata *u, const char *name, struct entry *e) {
     }
 }
 
-
 #define EXT_VERSION 1
 
 static int extension_cb(pa_native_protocol *p, pa_module *m, pa_native_connection *c, uint32_t tag, pa_tagstruct *t) {
@@ -1134,7 +1147,7 @@ static int extension_cb(pa_native_protocol *p, pa_module *m, pa_native_connectio
 
     case SUBCOMMAND_READ: {
       pa_datum key;
-      pa_bool_t done;
+      bool done;
 
       if (!pa_tagstruct_eof(t))
         goto fail;
@@ -1213,7 +1226,7 @@ static int extension_cb(pa_native_protocol *p, pa_module *m, pa_native_connectio
         if ((e = entry_read(u, device))) {
             pa_xfree(e->description);
             e->description = pa_xstrdup(description);
-            e->user_set_description = TRUE;
+            e->user_set_description = true;
 
             if (entry_write(u, (char *)device, e)) {
                 apply_entry(u, device, e);
@@ -1253,7 +1266,7 @@ static int extension_cb(pa_native_protocol *p, pa_module *m, pa_native_connectio
 
     case SUBCOMMAND_ROLE_DEVICE_PRIORITY_ROUTING: {
 
-        pa_bool_t enable;
+        bool enable;
 
         if (pa_tagstruct_get_boolean(t, &enable) < 0)
             goto fail;
@@ -1273,14 +1286,14 @@ static int extension_cb(pa_native_protocol *p, pa_module *m, pa_native_connectio
         struct entry *e;
         uint32_t role_index, n_devices;
         pa_datum key;
-        pa_bool_t done, sink_mode = TRUE;
+        bool done, sink_mode = true;
         struct device_t { uint32_t prio; char *device; };
         struct device_t *device;
         struct device_t **devices;
         uint32_t i, idx, offset;
         pa_hashmap *h;
         /*void *state;*/
-        pa_bool_t first;
+        bool first;
 
         if (pa_tagstruct_gets(t, &role) < 0 ||
             pa_tagstruct_getu32(t, &n_devices) < 0 ||
@@ -1292,7 +1305,7 @@ static int extension_cb(pa_native_protocol *p, pa_module *m, pa_native_connectio
 
         /* Cycle through the devices given and make sure they exist */
         h = pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func);
-        first = TRUE;
+        first = true;
         idx = 0;
         for (i = 0; i < n_devices; ++i) {
             const char *s;
@@ -1302,7 +1315,7 @@ static int extension_cb(pa_native_protocol *p, pa_module *m, pa_native_connectio
                     pa_xfree(device);
                 }
 
-                pa_hashmap_free(h, NULL);
+                pa_hashmap_free(h);
                 pa_log_error("Protocol error on reorder");
                 goto fail;
             }
@@ -1314,14 +1327,14 @@ static int extension_cb(pa_native_protocol *p, pa_module *m, pa_native_connectio
                     pa_xfree(device);
                 }
 
-                pa_hashmap_free(h, NULL);
-                pa_log_error("Client specified an unknown device in it's reorder list.");
+                pa_hashmap_free(h);
+                pa_log_error("Client specified an unknown device in its reorder list.");
                 goto fail;
             }
             entry_free(e);
 
             if (first) {
-                first = FALSE;
+                first = false;
                 sink_mode = (0 == strncmp("sink:", s, 5));
             } else if ((sink_mode && 0 != strncmp("sink:", s, 5)) || (!sink_mode && 0 != strncmp("source:", s, 7))) {
                 while ((device = pa_hashmap_steal_first(h))) {
@@ -1329,7 +1342,7 @@ static int extension_cb(pa_native_protocol *p, pa_module *m, pa_native_connectio
                     pa_xfree(device);
                 }
 
-                pa_hashmap_free(h, NULL);
+                pa_hashmap_free(h);
                 pa_log_error("Attempted to reorder mixed devices (sinks and sources)");
                 goto fail;
             }
@@ -1402,7 +1415,7 @@ static int extension_cb(pa_native_protocol *p, pa_module *m, pa_native_connectio
         while ((device = pa_hashmap_steal_first(h))) {
             devices[idx++] = device;
         }
-        pa_hashmap_free(h, NULL);
+        pa_hashmap_free(h);
 
         /* Simple bubble sort */
         for (i = 0; i < n_devices; ++i) {
@@ -1423,7 +1436,7 @@ static int extension_cb(pa_native_protocol *p, pa_module *m, pa_native_connectio
 
         /* Go through in order and write the new entry and cleanup our own list */
         idx = 1;
-        first = TRUE;
+        first = true;
         for (i = 0; i < n_devices; ++i) {
             if ((e = entry_read(u, devices[i]->device))) {
                 if (e->priority[role_index] == idx)
@@ -1432,7 +1445,7 @@ static int extension_cb(pa_native_protocol *p, pa_module *m, pa_native_connectio
                     e->priority[role_index] = idx;
 
                     if (entry_write(u, (char *) devices[i]->device, e)) {
-                        first = FALSE;
+                        first = false;
                         idx++;
                     }
                 }
@@ -1459,7 +1472,7 @@ static int extension_cb(pa_native_protocol *p, pa_module *m, pa_native_connectio
 
     case SUBCOMMAND_SUBSCRIBE: {
 
-      pa_bool_t enabled;
+      bool enabled;
 
       if (pa_tagstruct_get_boolean(t, &enabled) < 0 ||
         !pa_tagstruct_eof(t))
@@ -1509,7 +1522,7 @@ int pa__init(pa_module*m) {
     pa_sink *sink;
     pa_source *source;
     uint32_t idx;
-    pa_bool_t do_routing = FALSE, on_hotplug = TRUE, on_rescue = TRUE;
+    bool do_routing = false, on_hotplug = true, on_rescue = true;
     uint32_t total_devices;
 
     pa_assert(m);
@@ -1562,10 +1575,10 @@ int pa__init(pa_module*m) {
         u->source_unlink_hook_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_SOURCE_UNLINK], PA_HOOK_LATE+5, (pa_hook_cb_t) source_unlink_hook_callback, u);
     }
 
-    if (!(fname = pa_state_path("device-manager", TRUE)))
+    if (!(fname = pa_state_path("device-manager", true)))
         goto fail;
 
-    if (!(u->database = pa_database_open(fname, TRUE))) {
+    if (!(u->database = pa_database_open(fname, true))) {
         pa_log("Failed to open volume database '%s': %s", fname, pa_cstrerror(errno));
         pa_xfree(fname);
         goto fail;
@@ -1599,7 +1612,6 @@ int pa__init(pa_module*m) {
         /* Register it */
         for (uint32_t j = 0; j < i; ++j)
             subscribe_callback(m->core, PA_SUBSCRIPTION_EVENT_SINK|PA_SUBSCRIPTION_EVENT_NEW, p_i[j].index, u);
-
 
         /* We cycle over all the available sources so that they are added to our database if they are not in it yet */
         i = 0;

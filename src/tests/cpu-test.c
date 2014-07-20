@@ -36,34 +36,7 @@
 #include <pulsecore/sample-util.h>
 #include <pulsecore/mix.h>
 
-#define PA_CPU_TEST_RUN_START(l, t1, t2)                        \
-{                                                               \
-    int _j, _k;                                                 \
-    int _times = (t1), _times2 = (t2);                          \
-    pa_usec_t _start, _stop;                                    \
-    pa_usec_t _min = INT_MAX, _max = 0;                         \
-    double _s1 = 0, _s2 = 0;                                    \
-    const char *_label = (l);                                   \
-                                                                \
-    for (_k = 0; _k < _times2; _k++) {                          \
-        _start = pa_rtclock_now();                              \
-        for (_j = 0; _j < _times; _j++)
-
-#define PA_CPU_TEST_RUN_STOP                                    \
-        _stop = pa_rtclock_now();                               \
-                                                                \
-        if (_min > (_stop - _start)) _min = _stop - _start;     \
-        if (_max < (_stop - _start)) _max = _stop - _start;     \
-        _s1 += _stop - _start;                                  \
-        _s2 += (_stop - _start) * (_stop - _start);             \
-    }                                                           \
-    pa_log_debug("%s: %llu usec (avg: %g, min = %llu, max = %llu, stddev = %g).", _label, \
-            (long long unsigned int)_s1,                        \
-            ((double)_s1 / _times2),                            \
-            (long long unsigned int)_min,                       \
-            (long long unsigned int)_max,                       \
-            sqrt(_times2 * _s2 - _s1 * _s1) / _times2);         \
-}
+#include "runtime-test-util.h"
 
 /* Common defines for svolume tests */
 #define SAMPLES 1028
@@ -76,8 +49,8 @@ static void run_volume_test(
         pa_do_volume_func_t orig_func,
         int align,
         int channels,
-        pa_bool_t correct,
-        pa_bool_t perf) {
+        bool correct,
+        bool perf) {
 
     PA_DECLARE_ALIGNED(8, int16_t, s[SAMPLES]) = { 0 };
     PA_DECLARE_ALIGNED(8, int16_t, s_ref[SAMPLES]) = { 0 };
@@ -121,15 +94,15 @@ static void run_volume_test(
     if (perf) {
         pa_log_debug("Testing svolume %dch performance with %d sample alignment", channels, align);
 
-        PA_CPU_TEST_RUN_START("func", TIMES, TIMES2) {
+        PA_RUNTIME_TEST_RUN_START("func", TIMES, TIMES2) {
             memcpy(samples, samples_orig, size);
             func(samples, volumes, channels, size);
-        } PA_CPU_TEST_RUN_STOP
+        } PA_RUNTIME_TEST_RUN_STOP
 
-        PA_CPU_TEST_RUN_START("orig", TIMES, TIMES2) {
+        PA_RUNTIME_TEST_RUN_START("orig", TIMES, TIMES2) {
             memcpy(samples_ref, samples_orig, size);
             orig_func(samples_ref, volumes, channels, size);
-        } PA_CPU_TEST_RUN_STOP
+        } PA_RUNTIME_TEST_RUN_STOP
 
         fail_unless(memcmp(samples_ref, samples, size) == 0);
     }
@@ -155,11 +128,11 @@ START_TEST (svolume_mmx_test) {
     pa_log_debug("Checking MMX svolume");
     for (i = 1; i <= 3; i++) {
         for (j = 0; j < 7; j++)
-            run_volume_test(mmx_func, orig_func, j, i, TRUE, FALSE);
+            run_volume_test(mmx_func, orig_func, j, i, true, false);
     }
-    run_volume_test(mmx_func, orig_func, 7, 1, TRUE, TRUE);
-    run_volume_test(mmx_func, orig_func, 7, 2, TRUE, TRUE);
-    run_volume_test(mmx_func, orig_func, 7, 3, TRUE, TRUE);
+    run_volume_test(mmx_func, orig_func, 7, 1, true, true);
+    run_volume_test(mmx_func, orig_func, 7, 2, true, true);
+    run_volume_test(mmx_func, orig_func, 7, 3, true, true);
 }
 END_TEST
 
@@ -182,11 +155,11 @@ START_TEST (svolume_sse_test) {
     pa_log_debug("Checking SSE2 svolume");
     for (i = 1; i <= 3; i++) {
         for (j = 0; j < 7; j++)
-            run_volume_test(sse_func, orig_func, j, i, TRUE, FALSE);
+            run_volume_test(sse_func, orig_func, j, i, true, false);
     }
-    run_volume_test(sse_func, orig_func, 7, 1, TRUE, TRUE);
-    run_volume_test(sse_func, orig_func, 7, 2, TRUE, TRUE);
-    run_volume_test(sse_func, orig_func, 7, 3, TRUE, TRUE);
+    run_volume_test(sse_func, orig_func, 7, 1, true, true);
+    run_volume_test(sse_func, orig_func, 7, 2, true, true);
+    run_volume_test(sse_func, orig_func, 7, 3, true, true);
 }
 END_TEST
 #endif /* defined (__i386__) || defined (__amd64__) */
@@ -211,11 +184,11 @@ START_TEST (svolume_arm_test) {
     pa_log_debug("Checking ARM svolume");
     for (i = 1; i <= 3; i++) {
         for (j = 0; j < 7; j++)
-            run_volume_test(arm_func, orig_func, j, i, TRUE, FALSE);
+            run_volume_test(arm_func, orig_func, j, i, true, false);
     }
-    run_volume_test(arm_func, orig_func, 7, 1, TRUE, TRUE);
-    run_volume_test(arm_func, orig_func, 7, 2, TRUE, TRUE);
-    run_volume_test(arm_func, orig_func, 7, 3, TRUE, TRUE);
+    run_volume_test(arm_func, orig_func, 7, 1, true, true);
+    run_volume_test(arm_func, orig_func, 7, 2, true, true);
+    run_volume_test(arm_func, orig_func, 7, 3, true, true);
 }
 END_TEST
 #endif /* defined (__arm__) && defined (__linux__) */
@@ -243,10 +216,10 @@ START_TEST (svolume_orc_test) {
     pa_log_debug("Checking Orc svolume");
     for (i = 1; i <= 2; i++) {
         for (j = 0; j < 7; j++)
-            run_volume_test(orc_func, orig_func, j, i, TRUE, FALSE);
+            run_volume_test(orc_func, orig_func, j, i, true, false);
     }
-    run_volume_test(orc_func, orig_func, 7, 1, TRUE, TRUE);
-    run_volume_test(orc_func, orig_func, 7, 2, TRUE, TRUE);
+    run_volume_test(orc_func, orig_func, 7, 1, true, true);
+    run_volume_test(orc_func, orig_func, 7, 2, true, true);
 }
 END_TEST
 
@@ -265,8 +238,8 @@ static void run_conv_test_float_to_s16(
         pa_convert_func_t func,
         pa_convert_func_t orig_func,
         int align,
-        pa_bool_t correct,
-        pa_bool_t perf) {
+        bool correct,
+        bool perf) {
 
     PA_DECLARE_ALIGNED(8, int16_t, s[SAMPLES]) = { 0 };
     PA_DECLARE_ALIGNED(8, int16_t, s_ref[SAMPLES]) = { 0 };
@@ -301,13 +274,13 @@ static void run_conv_test_float_to_s16(
     if (perf) {
         pa_log_debug("Testing sconv performance with %d sample alignment", align);
 
-        PA_CPU_TEST_RUN_START("func", TIMES, TIMES2) {
+        PA_RUNTIME_TEST_RUN_START("func", TIMES, TIMES2) {
             func(nsamples, floats, samples);
-        } PA_CPU_TEST_RUN_STOP
+        } PA_RUNTIME_TEST_RUN_STOP
 
-        PA_CPU_TEST_RUN_START("orig", TIMES, TIMES2) {
+        PA_RUNTIME_TEST_RUN_START("orig", TIMES, TIMES2) {
             orig_func(nsamples, floats, samples_ref);
-        } PA_CPU_TEST_RUN_STOP
+        } PA_RUNTIME_TEST_RUN_STOP
     }
 }
 
@@ -318,8 +291,8 @@ static void run_conv_test_s16_to_float(
         pa_convert_func_t func,
         pa_convert_func_t orig_func,
         int align,
-        pa_bool_t correct,
-        pa_bool_t perf) {
+        bool correct,
+        bool perf) {
 
     PA_DECLARE_ALIGNED(8, float, f[SAMPLES]) = { 0 };
     PA_DECLARE_ALIGNED(8, float, f_ref[SAMPLES]) = { 0 };
@@ -352,13 +325,13 @@ static void run_conv_test_s16_to_float(
     if (perf) {
         pa_log_debug("Testing sconv performance with %d sample alignment", align);
 
-        PA_CPU_TEST_RUN_START("func", TIMES, TIMES2) {
+        PA_RUNTIME_TEST_RUN_START("func", TIMES, TIMES2) {
             func(nsamples, samples, floats);
-        } PA_CPU_TEST_RUN_STOP
+        } PA_RUNTIME_TEST_RUN_STOP
 
-        PA_CPU_TEST_RUN_START("orig", TIMES, TIMES2) {
+        PA_RUNTIME_TEST_RUN_START("orig", TIMES, TIMES2) {
             orig_func(nsamples, samples, floats_ref);
-        } PA_CPU_TEST_RUN_STOP
+        } PA_RUNTIME_TEST_RUN_STOP
     }
 }
 #endif /* HAVE_NEON */
@@ -381,14 +354,14 @@ START_TEST (sconv_sse2_test) {
     sse2_func = pa_get_convert_from_float32ne_function(PA_SAMPLE_S16LE);
 
     pa_log_debug("Checking SSE2 sconv (float -> s16)");
-    run_conv_test_float_to_s16(sse2_func, orig_func, 0, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse2_func, orig_func, 1, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse2_func, orig_func, 2, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse2_func, orig_func, 3, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse2_func, orig_func, 4, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse2_func, orig_func, 5, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse2_func, orig_func, 6, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse2_func, orig_func, 7, TRUE, TRUE);
+    run_conv_test_float_to_s16(sse2_func, orig_func, 0, true, false);
+    run_conv_test_float_to_s16(sse2_func, orig_func, 1, true, false);
+    run_conv_test_float_to_s16(sse2_func, orig_func, 2, true, false);
+    run_conv_test_float_to_s16(sse2_func, orig_func, 3, true, false);
+    run_conv_test_float_to_s16(sse2_func, orig_func, 4, true, false);
+    run_conv_test_float_to_s16(sse2_func, orig_func, 5, true, false);
+    run_conv_test_float_to_s16(sse2_func, orig_func, 6, true, false);
+    run_conv_test_float_to_s16(sse2_func, orig_func, 7, true, true);
 }
 END_TEST
 
@@ -408,14 +381,14 @@ START_TEST (sconv_sse_test) {
     sse_func = pa_get_convert_from_float32ne_function(PA_SAMPLE_S16LE);
 
     pa_log_debug("Checking SSE sconv (float -> s16)");
-    run_conv_test_float_to_s16(sse_func, orig_func, 0, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse_func, orig_func, 1, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse_func, orig_func, 2, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse_func, orig_func, 3, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse_func, orig_func, 4, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse_func, orig_func, 5, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse_func, orig_func, 6, TRUE, FALSE);
-    run_conv_test_float_to_s16(sse_func, orig_func, 7, TRUE, TRUE);
+    run_conv_test_float_to_s16(sse_func, orig_func, 0, true, false);
+    run_conv_test_float_to_s16(sse_func, orig_func, 1, true, false);
+    run_conv_test_float_to_s16(sse_func, orig_func, 2, true, false);
+    run_conv_test_float_to_s16(sse_func, orig_func, 3, true, false);
+    run_conv_test_float_to_s16(sse_func, orig_func, 4, true, false);
+    run_conv_test_float_to_s16(sse_func, orig_func, 5, true, false);
+    run_conv_test_float_to_s16(sse_func, orig_func, 6, true, false);
+    run_conv_test_float_to_s16(sse_func, orig_func, 7, true, true);
 }
 END_TEST
 #endif /* defined (__i386__) || defined (__amd64__) */
@@ -441,24 +414,24 @@ START_TEST (sconv_neon_test) {
     neon_to_func = pa_get_convert_to_float32ne_function(PA_SAMPLE_S16LE);
 
     pa_log_debug("Checking NEON sconv (float -> s16)");
-    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 0, TRUE, FALSE);
-    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 1, TRUE, FALSE);
-    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 2, TRUE, FALSE);
-    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 3, TRUE, FALSE);
-    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 4, TRUE, FALSE);
-    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 5, TRUE, FALSE);
-    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 6, TRUE, FALSE);
-    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 7, TRUE, TRUE);
+    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 0, true, false);
+    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 1, true, false);
+    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 2, true, false);
+    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 3, true, false);
+    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 4, true, false);
+    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 5, true, false);
+    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 6, true, false);
+    run_conv_test_float_to_s16(neon_from_func, orig_from_func, 7, true, true);
 
     pa_log_debug("Checking NEON sconv (s16 -> float)");
-    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 0, TRUE, FALSE);
-    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 1, TRUE, FALSE);
-    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 2, TRUE, FALSE);
-    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 3, TRUE, FALSE);
-    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 4, TRUE, FALSE);
-    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 5, TRUE, FALSE);
-    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 6, TRUE, FALSE);
-    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 7, TRUE, TRUE);
+    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 0, true, false);
+    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 1, true, false);
+    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 2, true, false);
+    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 3, true, false);
+    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 4, true, false);
+    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 5, true, false);
+    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 6, true, false);
+    run_conv_test_s16_to_float(neon_to_func, orig_to_func, 7, true, true);
 }
 END_TEST
 #endif /* HAVE_NEON */
@@ -478,8 +451,8 @@ static void run_remap_test_mono_stereo_float(
         pa_do_remap_func_t func,
         pa_do_remap_func_t orig_func,
         int align,
-        pa_bool_t correct,
-        pa_bool_t perf) {
+        bool correct,
+        bool perf) {
 
     PA_DECLARE_ALIGNED(8, float, s_ref[SAMPLES*2]) = { 0 };
     PA_DECLARE_ALIGNED(8, float, s[SAMPLES*2]) = { 0 };
@@ -513,13 +486,13 @@ static void run_remap_test_mono_stereo_float(
     if (perf) {
         pa_log_debug("Testing remap performance with %d sample alignment", align);
 
-        PA_CPU_TEST_RUN_START("func", TIMES, TIMES2) {
+        PA_RUNTIME_TEST_RUN_START("func", TIMES, TIMES2) {
             func(remap, stereo, mono, nsamples);
-        } PA_CPU_TEST_RUN_STOP
+        } PA_RUNTIME_TEST_RUN_STOP
 
-        PA_CPU_TEST_RUN_START("orig", TIMES, TIMES2) {
+        PA_RUNTIME_TEST_RUN_START("orig", TIMES, TIMES2) {
             orig_func(remap, stereo_ref, mono, nsamples);
-        } PA_CPU_TEST_RUN_STOP
+        } PA_RUNTIME_TEST_RUN_STOP
     }
 }
 
@@ -528,8 +501,8 @@ static void run_remap_test_mono_stereo_s16(
         pa_do_remap_func_t func,
         pa_do_remap_func_t orig_func,
         int align,
-        pa_bool_t correct,
-        pa_bool_t perf) {
+        bool correct,
+        bool perf) {
 
     PA_DECLARE_ALIGNED(8, int16_t, s_ref[SAMPLES*2]) = { 0 };
     PA_DECLARE_ALIGNED(8, int16_t, s[SAMPLES*2]) = { 0 };
@@ -562,13 +535,13 @@ static void run_remap_test_mono_stereo_s16(
     if (perf) {
         pa_log_debug("Testing remap performance with %d sample alignment", align);
 
-        PA_CPU_TEST_RUN_START("func", TIMES, TIMES2) {
+        PA_RUNTIME_TEST_RUN_START("func", TIMES, TIMES2) {
             func(remap, stereo, mono, nsamples);
-        } PA_CPU_TEST_RUN_STOP
+        } PA_RUNTIME_TEST_RUN_STOP
 
-        PA_CPU_TEST_RUN_START("orig", TIMES, TIMES2) {
+        PA_RUNTIME_TEST_RUN_START("orig", TIMES, TIMES2) {
             orig_func(remap, stereo_ref, mono, nsamples);
-        } PA_CPU_TEST_RUN_STOP
+        } PA_RUNTIME_TEST_RUN_STOP
     }
 }
 
@@ -576,17 +549,12 @@ static void remap_test_mono_stereo_float(
         pa_init_remap_func_t init_func,
         pa_init_remap_func_t orig_init_func) {
 
-    pa_sample_format_t sf;
     pa_remap_t remap;
-    pa_sample_spec iss, oss;
     pa_do_remap_func_t orig_func, func;
 
-    iss.format = oss.format = sf = PA_SAMPLE_FLOAT32NE;
-    iss.channels = 1;
-    oss.channels = 2;
-    remap.format = &sf;
-    remap.i_ss = &iss;
-    remap.o_ss = &oss;
+    remap.format = PA_SAMPLE_FLOAT32NE;
+    remap.i_ss.channels = 1;
+    remap.o_ss.channels = 2;
     remap.map_table_f[0][0] = 1.0;
     remap.map_table_f[1][0] = 1.0;
     remap.map_table_i[0][0] = 0x10000;
@@ -605,27 +573,22 @@ static void remap_test_mono_stereo_float(
         return;
     }
 
-    run_remap_test_mono_stereo_float(&remap, func, orig_func, 0, TRUE, FALSE);
-    run_remap_test_mono_stereo_float(&remap, func, orig_func, 1, TRUE, FALSE);
-    run_remap_test_mono_stereo_float(&remap, func, orig_func, 2, TRUE, FALSE);
-    run_remap_test_mono_stereo_float(&remap, func, orig_func, 3, TRUE, TRUE);
+    run_remap_test_mono_stereo_float(&remap, func, orig_func, 0, true, false);
+    run_remap_test_mono_stereo_float(&remap, func, orig_func, 1, true, false);
+    run_remap_test_mono_stereo_float(&remap, func, orig_func, 2, true, false);
+    run_remap_test_mono_stereo_float(&remap, func, orig_func, 3, true, true);
 }
 
 static void remap_test_mono_stereo_s16(
         pa_init_remap_func_t init_func,
         pa_init_remap_func_t orig_init_func) {
 
-    pa_sample_format_t sf;
     pa_remap_t remap;
-    pa_sample_spec iss, oss;
     pa_do_remap_func_t orig_func, func;
 
-    iss.format = oss.format = sf = PA_SAMPLE_S16NE;
-    iss.channels = 1;
-    oss.channels = 2;
-    remap.format = &sf;
-    remap.i_ss = &iss;
-    remap.o_ss = &oss;
+    remap.format = PA_SAMPLE_S16NE;
+    remap.i_ss.channels = 1;
+    remap.o_ss.channels = 2;
     remap.map_table_f[0][0] = 1.0;
     remap.map_table_f[1][0] = 1.0;
     remap.map_table_i[0][0] = 0x10000;
@@ -644,10 +607,10 @@ static void remap_test_mono_stereo_s16(
         return;
     }
 
-    run_remap_test_mono_stereo_s16(&remap, func, orig_func, 0, TRUE, FALSE);
-    run_remap_test_mono_stereo_s16(&remap, func, orig_func, 1, TRUE, FALSE);
-    run_remap_test_mono_stereo_s16(&remap, func, orig_func, 2, TRUE, FALSE);
-    run_remap_test_mono_stereo_s16(&remap, func, orig_func, 3, TRUE, TRUE);
+    run_remap_test_mono_stereo_s16(&remap, func, orig_func, 0, true, false);
+    run_remap_test_mono_stereo_s16(&remap, func, orig_func, 1, true, false);
+    run_remap_test_mono_stereo_s16(&remap, func, orig_func, 2, true, false);
+    run_remap_test_mono_stereo_s16(&remap, func, orig_func, 3, true, true);
 }
 
 #if defined (__i386__) || defined (__amd64__)
@@ -729,8 +692,8 @@ static void run_mix_test(
         pa_do_mix_func_t orig_func,
         int align,
         int channels,
-        pa_bool_t correct,
-        pa_bool_t perf) {
+        bool correct,
+        bool perf) {
 
     PA_DECLARE_ALIGNED(8, int16_t, in0[SAMPLES * 4]) = { 0 };
     PA_DECLARE_ALIGNED(8, int16_t, in1[SAMPLES * 4]) = { 0 };
@@ -753,15 +716,15 @@ static void run_mix_test(
     samples_ref = out_ref + (8 - align);
     nsamples = channels * (SAMPLES - (8 - align));
 
-    fail_unless((pool = pa_mempool_new(FALSE, 0)) != NULL, NULL);
+    fail_unless((pool = pa_mempool_new(false, 0)) != NULL, NULL);
 
     pa_random(samples0, nsamples * sizeof(int16_t));
-    c0.memblock = pa_memblock_new_fixed(pool, samples0, nsamples * sizeof(int16_t), FALSE);
+    c0.memblock = pa_memblock_new_fixed(pool, samples0, nsamples * sizeof(int16_t), false);
     c0.length = pa_memblock_get_length(c0.memblock);
     c0.index = 0;
 
     pa_random(samples1, nsamples * sizeof(int16_t));
-    c1.memblock = pa_memblock_new_fixed(pool, samples1, nsamples * sizeof(int16_t), FALSE);
+    c1.memblock = pa_memblock_new_fixed(pool, samples1, nsamples * sizeof(int16_t), false);
     c1.length = pa_memblock_get_length(c1.memblock);
     c1.index = 0;
 
@@ -803,17 +766,17 @@ static void run_mix_test(
     if (perf) {
         pa_log_debug("Testing %d-channel mixing performance with %d sample alignment", channels, align);
 
-        PA_CPU_TEST_RUN_START("func", TIMES, TIMES2) {
+        PA_RUNTIME_TEST_RUN_START("func", TIMES, TIMES2) {
             acquire_mix_streams(m, 2);
             func(m, 2, channels, samples, nsamples * sizeof(int16_t));
             release_mix_streams(m, 2);
-        } PA_CPU_TEST_RUN_STOP
+        } PA_RUNTIME_TEST_RUN_STOP
 
-        PA_CPU_TEST_RUN_START("orig", TIMES, TIMES2) {
+        PA_RUNTIME_TEST_RUN_START("orig", TIMES, TIMES2) {
             acquire_mix_streams(m, 2);
             orig_func(m, 2, channels, samples_ref, nsamples * sizeof(int16_t));
             release_mix_streams(m, 2);
-        } PA_CPU_TEST_RUN_STOP
+        } PA_RUNTIME_TEST_RUN_STOP
     }
 
     pa_memblock_unref(c0.memblock);
@@ -842,7 +805,7 @@ START_TEST (mix_neon_test) {
     neon_func = pa_get_mix_func(PA_SAMPLE_S16NE);
 
     pa_log_debug("Checking NEON mix");
-    run_mix_test(neon_func, orig_func, 7, 2, TRUE, TRUE);
+    run_mix_test(neon_func, orig_func, 7, 2, true, true);
 }
 END_TEST
 #endif /* HAVE_NEON */

@@ -18,8 +18,6 @@
 #include <config.h>
 #endif
 
-#include <pulse/rtclock.h>
-
 #include <pulsecore/macro.h>
 #include <pulsecore/endianmacros.h>
 
@@ -36,12 +34,9 @@ static void pa_sconv_s16le_from_f32ne_neon(unsigned n, const float *src, int16_t
         "movs       %[n], %[n], lsr #2      \n\t"
         "beq        2f                      \n\t"
 
-        "vdup.f32   q1, %[scale]            \n\t"
-
         "1:                                 \n\t"
         "vld1.32    {q0}, [%[src]]!         \n\t"
-        "vmul.f32   q0, q0, q1              \n\t" /* scale */
-        "vcvt.s32.f32 q0, q0, #16           \n\t" /* s32<-f32 as 16:16 fixed-point */
+        "vcvt.s32.f32 q0, q0, #31           \n\t" /* s32<-f32 as 16:16 fixed-point, with implicit multiplication by 32768 */
         "vqrshrn.s32 d0, q0, #16            \n\t" /* shift, round, narrow */
         "subs       %[n], %[n], #1          \n\t"
         "vst1.16    {d0}, [%[dst]]!         \n\t"
@@ -50,8 +45,8 @@ static void pa_sconv_s16le_from_f32ne_neon(unsigned n, const float *src, int16_t
         "2:                                 \n\t"
 
         : [dst] "+r" (dst), [src] "+r" (src), [n] "+r" (n) /* output operands (or input operands that get modified) */
-        : [scale] "r" (32768.0f) /* input operands */
-        : "memory", "cc", "q0", "q1" /* clobber list */
+        : /* input operands */
+        : "memory", "cc", "q0" /* clobber list */
     );
 
     /* leftovers */
@@ -63,20 +58,16 @@ static void pa_sconv_s16le_from_f32ne_neon(unsigned n, const float *src, int16_t
 
 static void pa_sconv_s16le_to_f32ne_neon(unsigned n, const int16_t *src, float *dst) {
     unsigned i = n & 3;
-
     const float invscale = 1.0f / (1 << 15);
 
     __asm__ __volatile__ (
-        "movs        %[n], %[n], lsr #2     \n\t"
+        "movs       %[n], %[n], lsr #2      \n\t"
         "beq        2f                      \n\t"
-
-        "vdup.f32   q1, %[invscale]         \n\t"
 
         "1:                                 \n\t"
         "vld1.16    {d0}, [%[src]]!         \n\t"
         "vmovl.s16  q0, d0                  \n\t" /* widen */
-        "vcvt.f32.s32 q0, q0                \n\t" /* f32<-s32 */
-        "vmul.f32   q0, q0, q1              \n\t"
+        "vcvt.f32.s32 q0, q0, #15           \n\t" /* f32<-s32 and divide by (1<<15) */
         "subs       %[n], %[n], #1          \n\t"
         "vst1.32    {q0}, [%[dst]]!         \n\t"
         "bgt        1b                      \n\t"
@@ -84,8 +75,8 @@ static void pa_sconv_s16le_to_f32ne_neon(unsigned n, const int16_t *src, float *
         "2:                                 \n\t"
 
         : [dst] "+r" (dst), [src] "+r" (src), [n] "+r" (n) /* output operands (or input operands that get modified) */
-        : [invscale] "r" (invscale) /* input operands */
-        : "memory", "cc", "q0", "q1" /* clobber list */
+        : /* input operands */
+        : "memory", "cc", "q0" /* clobber list */
     );
 
     /* leftovers */

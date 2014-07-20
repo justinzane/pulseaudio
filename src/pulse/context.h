@@ -87,7 +87,7 @@
  * Whenever the library creates an object, it will have an initial
  * reference count of one. Most of the time, this single reference will be
  * sufficient for the application, so all required reference count
- * interaction will be a single call to the objects unref function.
+ * interaction will be a single call to the object's unref function.
  *
  * \section context_sec Context
  *
@@ -279,6 +279,14 @@ void pa_context_rttime_restart(pa_context *c, pa_time_event *e, pa_usec_t usec);
  * pa_context_get_tile_size(pa_stream_get_context(s),
  * pa_stream_get_sample_spec(ss)); \since 0.9.20 */
 size_t pa_context_get_tile_size(pa_context *c, const pa_sample_spec *ss);
+
+/** Load the authentication cookie from a file. This function is primarily
+ * meant for PulseAudio's own tunnel modules, which need to load the cookie
+ * from a custom location. Applications don't usually need to care about the
+ * cookie at all, but if it happens that you know what the authentication
+ * cookie is and your application needs to load it from a non-standard
+ * location, feel free to use this function. \since 5.0 */
+int pa_context_load_cookie_from_file(pa_context *c, const char *cookie_file_path);
 
 PA_C_DECL_END
 

@@ -83,7 +83,7 @@ static void help(const char *argv0) {
     printf(_("\n"
          "  -h, --help                            Show this help\n"
          "      --version                         Show version\n"
-         "When no command is given pacmd starts in the interactive mode\n" ));
+         "When no command is given pacmd starts in the interactive mode.\n" ));
 }
 
 enum {
@@ -99,10 +99,9 @@ int main(int argc, char*argv[]) {
     char *obuf = NULL;
     size_t buf_size, ibuf_size, ibuf_index, ibuf_length, obuf_size, obuf_index, obuf_length;
     char *cli;
-    pa_bool_t ibuf_eof, obuf_eof, ibuf_closed, obuf_closed;
+    bool ibuf_eof, obuf_eof, ibuf_closed, obuf_closed;
     struct pollfd pollfd[3];
     struct pollfd *watch_socket, *watch_stdin, *watch_stdout;
-
     int stdin_type = 0, stdout_type = 0, fd_type = 0;
 
     char *bn = NULL;
@@ -168,7 +167,6 @@ int main(int argc, char*argv[]) {
             goto quit;
         }
 
-
         if (r >= 0)
             break;
 
@@ -191,7 +189,7 @@ int main(int argc, char*argv[]) {
     obuf_size = PA_MIN(buf_size, pa_pipe_buf(STDOUT_FILENO));
     obuf = pa_xmalloc(obuf_size);
     ibuf_index = ibuf_length = obuf_index = obuf_length = 0;
-    ibuf_eof = obuf_eof = ibuf_closed = obuf_closed = FALSE;
+    ibuf_eof = obuf_eof = ibuf_closed = obuf_closed = false;
 
     if (argc > 1) {
         for (i = 1; i < argc; i++) {
@@ -207,7 +205,15 @@ int main(int argc, char*argv[]) {
             }
         }
 
-        ibuf_eof = TRUE;
+        ibuf_eof = true;
+    }
+
+    if (!ibuf_eof && isatty(STDIN_FILENO)) {
+        /* send hello to enable interactive mode (welcome message, prompt) */
+        if (pa_write(fd, "hello\n", 6, &fd_type) < 0) {
+            pa_log(_("write(): %s"), strerror(errno));
+            goto quit;
+        }
     }
 
     for (;;) {
@@ -221,12 +227,12 @@ int main(int argc, char*argv[]) {
 
         if (ibuf_length <= 0 && ibuf_eof && !ibuf_closed) {
             shutdown(fd, SHUT_WR);
-            ibuf_closed = TRUE;
+            ibuf_closed = true;
         }
 
         if (obuf_length <= 0 && obuf_eof && !obuf_closed) {
             shutdown(fd, SHUT_RD);
-            obuf_closed = TRUE;
+            obuf_closed = true;
         }
 
         pa_zero(pollfd);
@@ -276,13 +282,13 @@ int main(int argc, char*argv[]) {
                         goto quit;
                     }
 
-                    ibuf_eof = TRUE;
+                    ibuf_eof = true;
                 } else {
                     ibuf_length = (size_t) r;
                     ibuf_index = 0;
                 }
             } else if (watch_stdin->revents & POLLHUP)
-                ibuf_eof = TRUE;
+                ibuf_eof = true;
         }
 
         if (watch_socket) {
@@ -296,18 +302,18 @@ int main(int argc, char*argv[]) {
                         goto quit;
                     }
 
-                    obuf_eof = TRUE;
+                    obuf_eof = true;
                 } else {
                     obuf_length = (size_t) r;
                     obuf_index = 0;
                 }
             } else if (watch_socket->revents & POLLHUP)
-                obuf_eof = TRUE;
+                obuf_eof = true;
         }
 
         if (watch_stdout) {
             if (watch_stdout->revents & POLLHUP) {
-                obuf_eof = TRUE;
+                obuf_eof = true;
                 obuf_length = 0;
             } else if (watch_stdout->revents & POLLOUT) {
                 ssize_t r;
@@ -325,7 +331,7 @@ int main(int argc, char*argv[]) {
 
         if (watch_socket) {
             if (watch_socket->revents & POLLHUP) {
-                ibuf_eof = TRUE;
+                ibuf_eof = true;
                 ibuf_length = 0;
             } if (watch_socket->revents & POLLOUT) {
                 ssize_t r;

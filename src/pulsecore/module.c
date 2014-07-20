@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <ltdl.h>
 
 #include <pulse/xmalloc.h>
 #include <pulse/proplist.h>
@@ -47,9 +48,63 @@
 #define PA_SYMBOL_GET_N_USED "pa__get_n_used"
 #define PA_SYMBOL_GET_DEPRECATE "pa__get_deprecated"
 
+bool pa_module_exists(const char *name) {
+    const char *paths, *state = NULL;
+    char *n, *p, *pathname;
+    bool result;
+
+    pa_assert(name);
+
+    if (name[0] == PA_PATH_SEP_CHAR) {
+        result = access(name, F_OK) == 0 ? true : false;
+        pa_log_debug("Checking for existence of '%s': %s", name, result ? "success" : "failure");
+        if (result)
+            return true;
+    }
+
+    if (!(paths = lt_dlgetsearchpath()))
+        return false;
+
+    /* strip .so from the end of name, if present */
+    n = pa_xstrdup(name);
+    p = strrchr(n, '.');
+    if (p && pa_streq(p, PA_SOEXT))
+        p[0] = 0;
+
+    while ((p = pa_split(paths, ":", &state))) {
+        pathname = pa_sprintf_malloc("%s" PA_PATH_SEP "%s" PA_SOEXT, p, n);
+        result = access(pathname, F_OK) == 0 ? true : false;
+        pa_log_debug("Checking for existence of '%s': %s", pathname, result ? "success" : "failure");
+        pa_xfree(pathname);
+        pa_xfree(p);
+        if (result) {
+            pa_xfree(n);
+            return true;
+        }
+    }
+
+    state = NULL;
+    if (PA_UNLIKELY(pa_run_from_build_tree())) {
+        while ((p = pa_split(paths, ":", &state))) {
+            pathname = pa_sprintf_malloc("%s" PA_PATH_SEP ".libs" PA_PATH_SEP "%s" PA_SOEXT, p, n);
+            result = access(pathname, F_OK) == 0 ? true : false;
+            pa_log_debug("Checking for existence of '%s': %s", pathname, result ? "success" : "failure");
+            pa_xfree(pathname);
+            pa_xfree(p);
+            if (result) {
+                pa_xfree(n);
+                return true;
+            }
+        }
+    }
+
+    pa_xfree(n);
+    return false;
+}
+
 pa_module* pa_module_load(pa_core *c, const char *name, const char *argument) {
     pa_module *m = NULL;
-    pa_bool_t (*load_once)(void);
+    bool (*load_once)(void);
     const char* (*get_deprecated)(void);
     pa_modinfo *mi;
 
@@ -62,8 +117,9 @@ pa_module* pa_module_load(pa_core *c, const char *name, const char *argument) {
     m = pa_xnew(pa_module, 1);
     m->name = pa_xstrdup(name);
     m->argument = pa_xstrdup(argument);
-    m->load_once = FALSE;
+    m->load_once = false;
     m->proplist = pa_proplist_new();
+    m->index = PA_IDXSET_INVALID;
 
     if (!(m->dl = lt_dlopenext(name))) {
         /* We used to print the error that is returned by lt_dlerror(), but
@@ -76,7 +132,7 @@ pa_module* pa_module_load(pa_core *c, const char *name, const char *argument) {
         goto fail;
     }
 
-    if ((load_once = (pa_bool_t (*)(void)) pa_load_sym(m->dl, name, PA_SYMBOL_LOAD_ONCE))) {
+    if ((load_once = (bool (*)(void)) pa_load_sym(m->dl, name, PA_SYMBOL_LOAD_ONCE))) {
 
         m->load_once = load_once();
 
@@ -110,15 +166,15 @@ pa_module* pa_module_load(pa_core *c, const char *name, const char *argument) {
     m->get_n_used = (int (*)(pa_module*_m)) pa_load_sym(m->dl, name, PA_SYMBOL_GET_N_USED);
     m->userdata = NULL;
     m->core = c;
-    m->unload_requested = FALSE;
+    m->unload_requested = false;
+
+    pa_assert_se(pa_idxset_put(c->modules, m, &m->index) >= 0);
+    pa_assert(m->index != PA_IDXSET_INVALID);
 
     if (m->init(m) < 0) {
         pa_log_error("Failed to load module \"%s\" (argument: \"%s\"): initialization failed.", name, argument ? argument : "");
         goto fail;
     }
-
-    pa_assert_se(pa_idxset_put(c->modules, m, &m->index) >= 0);
-    pa_assert(m->index != PA_IDXSET_INVALID);
 
     pa_log_info("Loaded \"%s\" (index: #%u; argument: \"%s\").", m->name, m->index, m->argument ? m->argument : "");
 
@@ -143,6 +199,9 @@ pa_module* pa_module_load(pa_core *c, const char *name, const char *argument) {
 fail:
 
     if (m) {
+        if (m->index != PA_IDXSET_INVALID)
+            pa_idxset_remove_by_index(c->modules, m->index);
+
         if (m->proplist)
             pa_proplist_free(m->proplist);
 
@@ -181,7 +240,7 @@ static void pa_module_free(pa_module *m) {
     pa_xfree(m);
 }
 
-void pa_module_unload(pa_core *c, pa_module *m, pa_bool_t force) {
+void pa_module_unload(pa_core *c, pa_module *m, bool force) {
     pa_assert(c);
     pa_assert(m);
 
@@ -194,7 +253,7 @@ void pa_module_unload(pa_core *c, pa_module *m, pa_bool_t force) {
     pa_module_free(m);
 }
 
-void pa_module_unload_by_index(pa_core *c, uint32_t idx, pa_bool_t force) {
+void pa_module_unload_by_index(pa_core *c, uint32_t idx, bool force) {
     pa_module *m;
     pa_assert(c);
     pa_assert(idx != PA_IDXSET_INVALID);
@@ -216,6 +275,9 @@ void pa_module_unload_all(pa_core *c) {
 
     pa_assert(c);
     pa_assert(c->modules);
+
+    if (pa_idxset_isempty(c->modules))
+        return;
 
     /* Unload modules in reverse order by default */
     indices = pa_xnew(uint32_t, pa_idxset_size(c->modules));
@@ -250,16 +312,16 @@ static void defer_cb(pa_mainloop_api*api, pa_defer_event *e, void *userdata) {
 
     while ((m = pa_idxset_iterate(c->modules, &state, NULL)))
         if (m->unload_requested)
-            pa_module_unload(c, m, TRUE);
+            pa_module_unload(c, m, true);
 }
 
-void pa_module_unload_request(pa_module *m, pa_bool_t force) {
+void pa_module_unload_request(pa_module *m, bool force) {
     pa_assert(m);
 
     if (m->core->disallow_module_loading && !force)
         return;
 
-    m->unload_requested = TRUE;
+    m->unload_requested = true;
 
     if (!m->core->module_defer_unload_event)
         m->core->module_defer_unload_event = m->core->mainloop->defer_new(m->core->mainloop, defer_cb, m->core);
@@ -267,7 +329,7 @@ void pa_module_unload_request(pa_module *m, pa_bool_t force) {
     m->core->mainloop->defer_enable(m->core->module_defer_unload_event, 1);
 }
 
-void pa_module_unload_request_by_index(pa_core *c, uint32_t idx, pa_bool_t force) {
+void pa_module_unload_request_by_index(pa_core *c, uint32_t idx, bool force) {
     pa_module *m;
     pa_assert(c);
 

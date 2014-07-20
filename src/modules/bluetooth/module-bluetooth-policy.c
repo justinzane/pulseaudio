@@ -89,7 +89,8 @@ static pa_hook_result_t source_put_hook_callback(pa_core *c, pa_source *source, 
     }
 
     /* Load module-loopback */
-    args = pa_sprintf_malloc("source=\"%s\" source_dont_move=\"true\" sink_input_properties=\"media.role=%s\"", source->name, role);
+    args = pa_sprintf_malloc("source=\"%s\" source_dont_move=\"true\" sink_input_properties=\"media.role=%s\"", source->name,
+                             role);
     (void) pa_module_load(c, "module-loopback", args);
     pa_xfree(args);
 
@@ -126,7 +127,8 @@ static pa_hook_result_t sink_put_hook_callback(pa_core *c, pa_sink *sink, void *
     }
 
     /* Load module-loopback */
-    args = pa_sprintf_malloc("sink=\"%s\" sink_dont_move=\"true\" source_output_properties=\"media.role=%s\"", sink->name, role);
+    args = pa_sprintf_malloc("sink=\"%s\" sink_dont_move=\"true\" source_output_properties=\"media.role=%s\"", sink->name,
+                             role);
     (void) pa_module_load(c, "module-loopback", args);
     pa_xfree(args);
 
@@ -147,7 +149,7 @@ static pa_card_profile *find_best_profile(pa_card *card) {
 
         if (result == NULL ||
             (profile->available == PA_AVAILABLE_YES && result->available == PA_AVAILABLE_UNKNOWN) ||
-            (profile->available == result->available && profile->priority > profile->priority))
+            (profile->available == result->available && profile->priority > result->priority))
             result = profile;
     }
 
@@ -170,7 +172,8 @@ static pa_hook_result_t profile_available_hook_callback(pa_core *c, pa_card_prof
         return PA_HOOK_OK;
 
     /* Do not automatically switch profiles for headsets, just in case */
-    if (pa_streq(profile->name, "hsp") || pa_streq(profile->name, "a2dp"))
+    /* TODO: remove a2dp when we decide to remove support for BlueZ 4 */
+    if (pa_streq(profile->name, "hsp") || pa_streq(profile->name, "a2dp") || pa_streq(profile->name, "a2dp_sink"))
         return PA_HOOK_OK;
 
     is_active_profile = card->active_profile == profile;
@@ -195,7 +198,7 @@ static pa_hook_result_t profile_available_hook_callback(pa_core *c, pa_card_prof
 
     pa_log_debug("Setting card '%s' to profile '%s'", card->name, selected_profile->name);
 
-    if (pa_card_set_profile(card, selected_profile->name, false) != 0)
+    if (pa_card_set_profile(card, selected_profile, false) != 0)
         pa_log_warn("Could not set profile '%s'", selected_profile->name);
 
     return PA_HOOK_OK;
@@ -239,9 +242,11 @@ int pa__init(pa_module *m) {
         goto fail;
     }
 
-    u->source_put_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_SOURCE_PUT], PA_HOOK_NORMAL, (pa_hook_cb_t) source_put_hook_callback, u);
+    u->source_put_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_SOURCE_PUT], PA_HOOK_NORMAL,
+                                         (pa_hook_cb_t) source_put_hook_callback, u);
 
-    u->sink_put_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_SINK_PUT], PA_HOOK_NORMAL, (pa_hook_cb_t) sink_put_hook_callback, u);
+    u->sink_put_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_SINK_PUT], PA_HOOK_NORMAL,
+                                       (pa_hook_cb_t) sink_put_hook_callback, u);
 
     u->profile_available_changed_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_CARD_PROFILE_AVAILABLE_CHANGED],
                                                         PA_HOOK_NORMAL, (pa_hook_cb_t) profile_available_hook_callback, u);

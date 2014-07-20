@@ -52,9 +52,10 @@ struct pa_cli {
 
     pa_client *client;
 
-    pa_bool_t fail, kill_requested;
+    bool fail, kill_requested;
     int defer_kill;
 
+    bool interactive;
     char *last_line;
 };
 
@@ -81,24 +82,15 @@ pa_cli* pa_cli_new(pa_core *core, pa_iochannel *io, pa_module *m) {
     if (!client)
         return NULL;
 
-    c = pa_xnew(pa_cli, 1);
+    c = pa_xnew0(pa_cli, 1);
     c->core = core;
     c->client = client;
     pa_assert_se(c->line = pa_ioline_new(io));
-
-    c->userdata = NULL;
-    c->eof_callback = NULL;
 
     c->client->kill = client_kill;
     c->client->userdata = c;
 
     pa_ioline_set_callback(c->line, line_callback, c);
-    pa_ioline_puts(c->line, "Welcome to PulseAudio! Use \"help\" for usage information.\n"PROMPT);
-
-    c->fail = c->kill_requested = FALSE;
-    c->defer_kill = 0;
-
-    c->last_line = NULL;
 
     return c;
 }
@@ -122,7 +114,7 @@ static void client_kill(pa_client *client) {
     pa_log_debug("CLI client killed.");
 
     if (c->defer_kill)
-        c->kill_requested = TRUE;
+        c->kill_requested = true;
     else if (c->eof_callback)
         c->eof_callback(c, c->userdata);
 }
@@ -154,7 +146,13 @@ static void line_callback(pa_ioline *line, const char *s, void *userdata) {
 
     pa_assert_se(buf = pa_strbuf_new());
     c->defer_kill++;
-    pa_cli_command_execute_line(c->core, s, buf, &c->fail);
+    if (pa_streq(s, "hello")) {
+        pa_strbuf_printf(buf, "Welcome to PulseAudio %s! "
+            "Use \"help\" for usage information.\n", PACKAGE_VERSION);
+        c->interactive = true;
+    }
+    else
+        pa_cli_command_execute_line(c->core, s, buf, &c->fail);
     c->defer_kill--;
     pa_ioline_puts(line, p = pa_strbuf_tostring_free(buf));
     pa_xfree(p);
@@ -162,7 +160,7 @@ static void line_callback(pa_ioline *line, const char *s, void *userdata) {
     if (c->kill_requested) {
         if (c->eof_callback)
             c->eof_callback(c, c->userdata);
-    } else
+    } else if (c->interactive)
         pa_ioline_puts(line, PROMPT);
 }
 

@@ -51,10 +51,10 @@ struct pa_iochannel {
     pa_iochannel_cb_t callback;
     void*userdata;
 
-    pa_bool_t readable:1;
-    pa_bool_t writable:1;
-    pa_bool_t hungup:1;
-    pa_bool_t no_close:1;
+    bool readable:1;
+    bool writable:1;
+    bool hungup:1;
+    bool no_close:1;
 
     pa_io_event* input_event, *output_event;
 };
@@ -119,7 +119,7 @@ static void enable_events(pa_iochannel *io) {
                     io->mainloop->io_enable(io->output_event, PA_IO_EVENT_OUTPUT);
                 else
                     io->output_event = io->mainloop->io_new(io->mainloop, io->ofd, PA_IO_EVENT_OUTPUT, callback, io);
-            } else if (io->input_event) {
+            } else if (io->output_event) {
                 io->mainloop->io_free(io->output_event);
                 io->output_event = NULL;
             }
@@ -129,7 +129,7 @@ static void enable_events(pa_iochannel *io) {
 
 static void callback(pa_mainloop_api* m, pa_io_event *e, int fd, pa_io_event_flags_t f, void *userdata) {
     pa_iochannel *io = userdata;
-    pa_bool_t changed = FALSE;
+    bool changed = false;
 
     pa_assert(m);
     pa_assert(e);
@@ -137,19 +137,19 @@ static void callback(pa_mainloop_api* m, pa_io_event *e, int fd, pa_io_event_fla
     pa_assert(userdata);
 
     if ((f & (PA_IO_EVENT_HANGUP|PA_IO_EVENT_ERROR)) && !io->hungup) {
-        io->hungup = TRUE;
-        changed = TRUE;
+        io->hungup = true;
+        changed = true;
     }
 
     if ((f & PA_IO_EVENT_INPUT) && !io->readable) {
-        io->readable = TRUE;
-        changed = TRUE;
+        io->readable = true;
+        changed = true;
         pa_assert(e == io->input_event);
     }
 
     if ((f & PA_IO_EVENT_OUTPUT) && !io->writable) {
-        io->writable = TRUE;
-        changed = TRUE;
+        io->writable = true;
+        changed = true;
         pa_assert(e == io->output_event);
     }
 
@@ -197,19 +197,19 @@ void pa_iochannel_free(pa_iochannel*io) {
     pa_xfree(io);
 }
 
-pa_bool_t pa_iochannel_is_readable(pa_iochannel*io) {
+bool pa_iochannel_is_readable(pa_iochannel*io) {
     pa_assert(io);
 
     return io->readable || io->hungup;
 }
 
-pa_bool_t pa_iochannel_is_writable(pa_iochannel*io) {
+bool pa_iochannel_is_writable(pa_iochannel*io) {
     pa_assert(io);
 
     return io->writable && !io->hungup;
 }
 
-pa_bool_t pa_iochannel_is_hungup(pa_iochannel*io) {
+bool pa_iochannel_is_hungup(pa_iochannel*io) {
     pa_assert(io);
 
     return io->hungup;
@@ -223,10 +223,21 @@ ssize_t pa_iochannel_write(pa_iochannel*io, const void*data, size_t l) {
     pa_assert(l);
     pa_assert(io->ofd >= 0);
 
-    if ((r = pa_write(io->ofd, data, l, &io->ofd_type)) >= 0) {
-        io->writable = io->hungup = FALSE;
-        enable_events(io);
+    r = pa_write(io->ofd, data, l, &io->ofd_type);
+
+    if ((size_t) r == l)
+        return r; /* Fast path - we almost always successfully write everything */
+
+    if (r < 0) {
+        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+            r = 0;
+        else
+            return r;
     }
+
+    /* Partial write - let's get a notification when we can write more */
+    io->writable = io->hungup = false;
+    enable_events(io);
 
     return r;
 }
@@ -243,7 +254,7 @@ ssize_t pa_iochannel_read(pa_iochannel*io, void*data, size_t l) {
         /* We also reset the hangup flag here to ensure that another
          * IO callback is triggered so that we will again call into
          * user code */
-        io->readable = io->hungup = FALSE;
+        io->readable = io->hungup = false;
         enable_events(io);
     }
 
@@ -252,7 +263,7 @@ ssize_t pa_iochannel_read(pa_iochannel*io, void*data, size_t l) {
 
 #ifdef HAVE_CREDS
 
-pa_bool_t pa_iochannel_creds_supported(pa_iochannel *io) {
+bool pa_iochannel_creds_supported(pa_iochannel *io) {
     struct {
         struct sockaddr sa;
 #ifdef HAVE_SYS_UN_H
@@ -269,7 +280,7 @@ pa_bool_t pa_iochannel_creds_supported(pa_iochannel *io) {
 
     l = sizeof(sa);
     if (getsockname(io->ifd, &sa.sa, &l) < 0)
-        return FALSE;
+        return false;
 
     return sa.sa.sa_family == AF_UNIX;
 }
@@ -330,28 +341,76 @@ ssize_t pa_iochannel_write_with_creds(pa_iochannel*io, const void*data, size_t l
     mh.msg_controllen = sizeof(cmsg);
 
     if ((r = sendmsg(io->ofd, &mh, MSG_NOSIGNAL)) >= 0) {
-        io->writable = io->hungup = FALSE;
+        io->writable = io->hungup = false;
         enable_events(io);
     }
 
     return r;
 }
 
-ssize_t pa_iochannel_read_with_creds(pa_iochannel*io, void*data, size_t l, pa_creds *creds, pa_bool_t *creds_valid) {
+ssize_t pa_iochannel_write_with_fds(pa_iochannel*io, const void*data, size_t l, int nfd, const int *fds) {
+    ssize_t r;
+    int *msgdata;
+    struct msghdr mh;
+    struct iovec iov;
+    union {
+        struct cmsghdr hdr;
+        uint8_t data[CMSG_SPACE(sizeof(int) * MAX_ANCIL_FDS)];
+    } cmsg;
+
+    pa_assert(io);
+    pa_assert(data);
+    pa_assert(l);
+    pa_assert(io->ofd >= 0);
+    pa_assert(fds);
+    pa_assert(nfd > 0);
+    pa_assert(nfd <= MAX_ANCIL_FDS);
+
+    pa_zero(iov);
+    iov.iov_base = (void*) data;
+    iov.iov_len = l;
+
+    pa_zero(cmsg);
+    cmsg.hdr.cmsg_level = SOL_SOCKET;
+    cmsg.hdr.cmsg_type = SCM_RIGHTS;
+
+    msgdata = (int*) CMSG_DATA(&cmsg.hdr);
+    memcpy(msgdata, fds, nfd * sizeof(int));
+    cmsg.hdr.cmsg_len = CMSG_LEN(sizeof(int) * nfd);
+
+    pa_zero(mh);
+    mh.msg_iov = &iov;
+    mh.msg_iovlen = 1;
+    mh.msg_control = &cmsg;
+    mh.msg_controllen = sizeof(cmsg);
+
+    if ((r = sendmsg(io->ofd, &mh, MSG_NOSIGNAL)) >= 0) {
+        io->writable = io->hungup = false;
+        enable_events(io);
+    }
+    return r;
+}
+
+ssize_t pa_iochannel_read_with_ancil(pa_iochannel*io, void*data, size_t l, pa_ancil *ancil) {
     ssize_t r;
     struct msghdr mh;
     struct iovec iov;
     union {
         struct cmsghdr hdr;
-        uint8_t data[CMSG_SPACE(sizeof(struct ucred))];
+        uint8_t data[CMSG_SPACE(sizeof(struct ucred)) + CMSG_SPACE(sizeof(int) * MAX_ANCIL_FDS)];
     } cmsg;
 
     pa_assert(io);
     pa_assert(data);
     pa_assert(l);
     pa_assert(io->ifd >= 0);
-    pa_assert(creds);
-    pa_assert(creds_valid);
+    pa_assert(ancil);
+
+    if (io->ifd_type > 0) {
+        ancil->creds_valid = false;
+        ancil->nfd = 0;
+        return pa_iochannel_read(io, data, l);
+    }
 
     pa_zero(iov);
     iov.iov_base = data;
@@ -367,24 +426,44 @@ ssize_t pa_iochannel_read_with_creds(pa_iochannel*io, void*data, size_t l, pa_cr
     if ((r = recvmsg(io->ifd, &mh, 0)) >= 0) {
         struct cmsghdr *cmh;
 
-        *creds_valid = FALSE;
+        ancil->creds_valid = false;
+        ancil->nfd = 0;
 
         for (cmh = CMSG_FIRSTHDR(&mh); cmh; cmh = CMSG_NXTHDR(&mh, cmh)) {
 
-            if (cmh->cmsg_level == SOL_SOCKET && cmh->cmsg_type == SCM_CREDENTIALS) {
+            if (cmh->cmsg_level != SOL_SOCKET)
+                continue;
+
+            if (cmh->cmsg_type == SCM_CREDENTIALS) {
                 struct ucred u;
                 pa_assert(cmh->cmsg_len == CMSG_LEN(sizeof(struct ucred)));
                 memcpy(&u, CMSG_DATA(cmh), sizeof(struct ucred));
 
-                creds->gid = u.gid;
-                creds->uid = u.uid;
-                *creds_valid = TRUE;
-                break;
+                ancil->creds.gid = u.gid;
+                ancil->creds.uid = u.uid;
+                ancil->creds_valid = true;
+            }
+            else if (cmh->cmsg_type == SCM_RIGHTS) {
+                int nfd = (cmh->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+                if (nfd > MAX_ANCIL_FDS) {
+                    int i;
+                    pa_log("Trying to receive too many file descriptors!");
+                    for (i = 0; i < nfd; i++)
+                        pa_close(((int*) CMSG_DATA(cmh))[i]);
+                    continue;
+                }
+                memcpy(ancil->fds, CMSG_DATA(cmh), nfd * sizeof(int));
+                ancil->nfd = nfd;
             }
         }
 
-        io->readable = io->hungup = FALSE;
+        io->readable = io->hungup = false;
         enable_events(io);
+    }
+
+    if (r == -1 && errno == ENOTSOCK) {
+        io->ifd_type = 1;
+        return pa_iochannel_read_with_ancil(io, data, l, ancil);
     }
 
     return r;
@@ -399,7 +478,7 @@ void pa_iochannel_set_callback(pa_iochannel*io, pa_iochannel_cb_t _callback, voi
     io->userdata = userdata;
 }
 
-void pa_iochannel_set_noclose(pa_iochannel*io, pa_bool_t b) {
+void pa_iochannel_set_noclose(pa_iochannel*io, bool b) {
     pa_assert(io);
 
     io->no_close = !!b;
@@ -443,15 +522,15 @@ int pa_iochannel_get_send_fd(pa_iochannel *io) {
     return io->ofd;
 }
 
-pa_bool_t pa_iochannel_socket_is_local(pa_iochannel *io) {
+bool pa_iochannel_socket_is_local(pa_iochannel *io) {
     pa_assert(io);
 
     if (pa_socket_is_local(io->ifd))
-        return TRUE;
+        return true;
 
     if (io->ifd != io->ofd)
         if (pa_socket_is_local(io->ofd))
-            return TRUE;
+            return true;
 
-    return FALSE;
+    return false;
 }

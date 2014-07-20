@@ -38,9 +38,10 @@
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("Sine wave generator");
 PA_MODULE_VERSION(PACKAGE_VERSION);
-PA_MODULE_LOAD_ONCE(FALSE);
+PA_MODULE_LOAD_ONCE(false);
 PA_MODULE_USAGE(
         "sink=<sink to connect to> "
+        "rate=<sample rate> "
         "frequency=<frequency in Hz>");
 
 struct userdata {
@@ -53,6 +54,7 @@ struct userdata {
 
 static const char* const valid_modargs[] = {
     "sink",
+    "rate",
     "frequency",
     NULL,
 };
@@ -99,7 +101,7 @@ static void sink_input_kill_cb(pa_sink_input *i) {
     pa_sink_input_unref(u->sink_input);
     u->sink_input = NULL;
 
-    pa_module_unload_request(u->module, TRUE);
+    pa_module_unload_request(u->module, true);
 }
 
 /* Called from IO thread context */
@@ -113,7 +115,7 @@ static void sink_input_state_change_cb(pa_sink_input *i, pa_sink_input_state_t s
      * we are heard right-away. */
     if (PA_SINK_INPUT_IS_LINKED(state) &&
         i->thread_info.state == PA_SINK_INPUT_INIT)
-        pa_sink_input_request_rewind(i, 0, FALSE, TRUE, TRUE);
+        pa_sink_input_request_rewind(i, 0, false, true, true);
 }
 
 int pa__init(pa_module*m) {
@@ -138,6 +140,11 @@ int pa__init(pa_module*m) {
     ss.rate = sink->sample_spec.rate;
     ss.channels = 1;
 
+    if (pa_modargs_get_sample_rate(ma, &ss.rate) < 0) {
+        pa_log("Invalid rate specification");
+        goto fail;
+    }
+
     frequency = 440;
     if (pa_modargs_get_value_u32(ma, "frequency", &frequency) < 0 || frequency < 1 || frequency > ss.rate/2) {
         pa_log("Invalid frequency specification");
@@ -155,7 +162,7 @@ int pa__init(pa_module*m) {
     pa_sink_input_new_data_init(&data);
     data.driver = __FILE__;
     data.module = m;
-    pa_sink_input_new_data_set_sink(&data, sink, FALSE);
+    pa_sink_input_new_data_set_sink(&data, sink, false);
     pa_proplist_setf(data.proplist, PA_PROP_MEDIA_NAME, "%u Hz Sine", frequency);
     pa_proplist_sets(data.proplist, PA_PROP_MEDIA_ROLE, "abstract");
     pa_proplist_setf(data.proplist, "sine.hz", "%u", frequency);

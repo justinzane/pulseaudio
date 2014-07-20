@@ -52,16 +52,16 @@ static void header_free(struct header *hdr) {
 }
 
 pa_headerlist* pa_headerlist_new(void) {
-    return MAKE_HEADERLIST(pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func));
+    return MAKE_HEADERLIST(pa_hashmap_new_full(pa_idxset_string_hash_func, pa_idxset_string_compare_func, NULL, (pa_free_cb_t) header_free));
 }
 
 void pa_headerlist_free(pa_headerlist* p) {
-    pa_hashmap_free(MAKE_HASHMAP(p), (pa_free_cb_t) header_free);
+    pa_hashmap_free(MAKE_HASHMAP(p));
 }
 
 int pa_headerlist_puts(pa_headerlist *p, const char *key, const char *value) {
     struct header *hdr;
-    pa_bool_t add = FALSE;
+    bool add = false;
 
     pa_assert(p);
     pa_assert(key);
@@ -69,7 +69,7 @@ int pa_headerlist_puts(pa_headerlist *p, const char *key, const char *value) {
     if (!(hdr = pa_hashmap_get(MAKE_HASHMAP(p), key))) {
         hdr = pa_xnew(struct header, 1);
         hdr->key = pa_xstrdup(key);
-        add = TRUE;
+        add = true;
     } else
         pa_xfree(hdr->value);
 
@@ -84,7 +84,7 @@ int pa_headerlist_puts(pa_headerlist *p, const char *key, const char *value) {
 
 int pa_headerlist_putsappend(pa_headerlist *p, const char *key, const char *value) {
     struct header *hdr;
-    pa_bool_t add = FALSE;
+    bool add = false;
 
     pa_assert(p);
     pa_assert(key);
@@ -93,7 +93,7 @@ int pa_headerlist_putsappend(pa_headerlist *p, const char *key, const char *valu
         hdr = pa_xnew(struct header, 1);
         hdr->key = pa_xstrdup(key);
         hdr->value = pa_xstrdup(value);
-        add = TRUE;
+        add = true;
     } else {
         void *newval = pa_sprintf_malloc("%s%s", (char*)hdr->value, value);
         pa_xfree(hdr->value);
@@ -129,16 +129,10 @@ const char *pa_headerlist_gets(pa_headerlist *p, const char *key) {
 }
 
 int pa_headerlist_remove(pa_headerlist *p, const char *key) {
-    struct header *hdr;
-
     pa_assert(p);
     pa_assert(key);
 
-    if (!(hdr = pa_hashmap_remove(MAKE_HASHMAP(p), key)))
-        return -1;
-
-    header_free(hdr);
-    return 0;
+    return pa_hashmap_remove_and_free(MAKE_HASHMAP(p), key);
 }
 
 const char *pa_headerlist_iterate(pa_headerlist *p, void **state) {

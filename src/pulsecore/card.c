@@ -89,8 +89,8 @@ pa_card_new_data* pa_card_new_data_init(pa_card_new_data *data) {
 
     memset(data, 0, sizeof(*data));
     data->proplist = pa_proplist_new();
-    data->profiles = pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func);
-    data->ports = pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func);
+    data->profiles = pa_hashmap_new_full(pa_idxset_string_hash_func, pa_idxset_string_compare_func, NULL, (pa_free_cb_t) pa_card_profile_free);
+    data->ports = pa_hashmap_new_full(pa_idxset_string_hash_func, pa_idxset_string_compare_func, NULL, (pa_free_cb_t) pa_device_port_unref);
     return data;
 }
 
@@ -99,19 +99,6 @@ void pa_card_new_data_set_name(pa_card_new_data *data, const char *name) {
 
     pa_xfree(data->name);
     data->name = pa_xstrdup(name);
-}
-
-void pa_card_add_profile(pa_card *c, pa_card_profile *profile) {
-    pa_assert(c);
-    pa_assert(profile);
-
-    /* take ownership of the profile */
-    pa_assert_se(pa_hashmap_put(c->profiles, profile->name, profile) >= 0);
-    profile->card = c;
-
-    pa_subscription_post(c->core, PA_SUBSCRIPTION_EVENT_CARD|PA_SUBSCRIPTION_EVENT_CHANGE, c->index);
-
-    pa_hook_fire(&c->core->hooks[PA_CORE_HOOK_CARD_PROFILE_ADDED], profile);
 }
 
 void pa_card_new_data_set_profile(pa_card_new_data *data, const char *profile) {
@@ -128,10 +115,10 @@ void pa_card_new_data_done(pa_card_new_data *data) {
     pa_proplist_free(data->proplist);
 
     if (data->profiles)
-        pa_hashmap_free(data->profiles, (pa_free_cb_t) pa_card_profile_free);
+        pa_hashmap_free(data->profiles);
 
     if (data->ports)
-        pa_hashmap_free(data->ports, (pa_free_cb_t) pa_device_port_unref);
+        pa_hashmap_free(data->ports);
 
     pa_xfree(data->name);
     pa_xfree(data->active_profile);
@@ -188,23 +175,34 @@ pa_card *pa_card_new(pa_core *core, pa_card_new_data *data) {
         port->card = c;
 
     c->active_profile = NULL;
-    c->save_profile = FALSE;
+    c->save_profile = false;
 
     if (data->active_profile)
         if ((c->active_profile = pa_hashmap_get(c->profiles, data->active_profile)))
             c->save_profile = data->save_profile;
 
     if (!c->active_profile) {
-        PA_HASHMAP_FOREACH(profile, c->profiles, state)
+        PA_HASHMAP_FOREACH(profile, c->profiles, state) {
+            if (profile->available == PA_AVAILABLE_NO)
+                continue;
+
             if (!c->active_profile || profile->priority > c->active_profile->priority)
                 c->active_profile = profile;
+        }
+        /* If all profiles are not available, then we still need to pick one */
+        if (!c->active_profile) {
+            PA_HASHMAP_FOREACH(profile, c->profiles, state)
+                if (!c->active_profile || profile->priority > c->active_profile->priority)
+                    c->active_profile = profile;
+        }
+        pa_assert(c->active_profile);
     }
 
     c->userdata = NULL;
     c->set_profile = NULL;
 
-    pa_device_init_description(c->proplist);
-    pa_device_init_icon(c->proplist, TRUE);
+    pa_device_init_description(c->proplist, c);
+    pa_device_init_icon(c->proplist, true);
     pa_device_init_intended_roles(c->proplist);
 
     pa_assert_se(pa_idxset_put(core->cards, c, &c->index) >= 0);
@@ -239,10 +237,10 @@ void pa_card_free(pa_card *c) {
     pa_assert(pa_idxset_isempty(c->sources));
     pa_idxset_free(c->sources, NULL);
 
-    pa_hashmap_free(c->ports, (pa_free_cb_t) pa_device_port_unref);
+    pa_hashmap_free(c->ports);
 
     if (c->profiles)
-        pa_hashmap_free(c->profiles, (pa_free_cb_t) pa_card_profile_free);
+        pa_hashmap_free(c->profiles);
 
     pa_proplist_free(c->proplist);
     pa_xfree(c->driver);
@@ -250,22 +248,30 @@ void pa_card_free(pa_card *c) {
     pa_xfree(c);
 }
 
-int pa_card_set_profile(pa_card *c, const char *name, pa_bool_t save) {
-    pa_card_profile *profile;
+void pa_card_add_profile(pa_card *c, pa_card_profile *profile) {
+    pa_assert(c);
+    pa_assert(profile);
+
+    /* take ownership of the profile */
+    pa_assert_se(pa_hashmap_put(c->profiles, profile->name, profile) >= 0);
+    profile->card = c;
+
+    pa_subscription_post(c->core, PA_SUBSCRIPTION_EVENT_CARD|PA_SUBSCRIPTION_EVENT_CHANGE, c->index);
+
+    pa_hook_fire(&c->core->hooks[PA_CORE_HOOK_CARD_PROFILE_ADDED], profile);
+}
+
+int pa_card_set_profile(pa_card *c, pa_card_profile *profile, bool save) {
     int r;
 
     pa_assert(c);
+    pa_assert(profile);
+    pa_assert(profile->card == c);
 
     if (!c->set_profile) {
         pa_log_debug("set_profile() operation not implemented for card %u \"%s\"", c->index, c->name);
         return -PA_ERR_NOTIMPLEMENTED;
     }
-
-    if (!name)
-        return -PA_ERR_NOENTITY;
-
-    if (!(profile = pa_hashmap_get(c->profiles, name)))
-        return -PA_ERR_NOENTITY;
 
     if (c->active_profile == profile) {
         c->save_profile = c->save_profile || save;
@@ -287,7 +293,7 @@ int pa_card_set_profile(pa_card *c, const char *name, pa_bool_t save) {
     return 0;
 }
 
-int pa_card_suspend(pa_card *c, pa_bool_t suspend, pa_suspend_cause_t cause) {
+int pa_card_suspend(pa_card *c, bool suspend, pa_suspend_cause_t cause) {
     pa_sink *sink;
     pa_source *source;
     uint32_t idx;

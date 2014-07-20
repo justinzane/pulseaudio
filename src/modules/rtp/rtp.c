@@ -170,7 +170,7 @@ int pa_rtp_recv(pa_rtp_context *c, pa_memchunk *chunk, pa_mempool *pool, struct 
     unsigned cc;
     ssize_t r;
     uint8_t aux[1024];
-    pa_bool_t found_tstamp = FALSE;
+    bool found_tstamp = false;
 
     pa_assert(c);
     pa_assert(chunk);
@@ -182,8 +182,29 @@ int pa_rtp_recv(pa_rtp_context *c, pa_memchunk *chunk, pa_mempool *pool, struct 
         goto fail;
     }
 
-    if (size <= 0)
-        return 0;
+    if (size <= 0) {
+        /* size can be 0 due to any of the following reasons:
+         *
+         * 1. Somebody sent us a perfectly valid zero-length UDP packet.
+         * 2. Somebody sent us a UDP packet with a bad CRC.
+         *
+         * It is unknown whether size can actually be less than zero.
+         *
+         * In the first case, the packet has to be read out, otherwise the
+         * kernel will tell us again and again about it, thus preventing
+         * reception of any further packets. So let's just read it out
+         * now and discard it later, when comparing the number of bytes
+         * received (0) with the number of bytes wanted (1, see below).
+         *
+         * In the second case, recvmsg() will fail, thus allowing us to
+         * return the error.
+         *
+         * Just to avoid passing zero-sized memchunks and NULL pointers to
+         * recvmsg(), let's force allocation of at least one byte by setting
+         * size to 1.
+         */
+        size = 1;
+    }
 
     if (c->memchunk.length < (unsigned) size) {
         size_t l;
@@ -280,13 +301,13 @@ int pa_rtp_recv(pa_rtp_context *c, pa_memchunk *chunk, pa_mempool *pool, struct 
     for (cm = CMSG_FIRSTHDR(&m); cm; cm = CMSG_NXTHDR(&m, cm))
         if (cm->cmsg_level == SOL_SOCKET && cm->cmsg_type == SCM_TIMESTAMP) {
             memcpy(tstamp, CMSG_DATA(cm), sizeof(struct timeval));
-            found_tstamp = TRUE;
+            found_tstamp = true;
             break;
         }
 
     if (!found_tstamp) {
         pa_log_warn("Couldn't find SCM_TIMESTAMP data in auxiliary recvmsg() data!");
-        memset(tstamp, 0, sizeof(tstamp));
+        pa_zero(*tstamp);
     }
 
     return 0;

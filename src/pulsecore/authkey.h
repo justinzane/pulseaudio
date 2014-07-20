@@ -24,8 +24,7 @@
 
 #include <sys/types.h>
 
-int pa_authkey_load(const char *path, pa_bool_t create, void *data, size_t len);
-int pa_authkey_load_auto(const char *fn, pa_bool_t create, void *data, size_t length);
+int pa_authkey_load(const char *fn, bool create, void *data, size_t length);
 
 int pa_authkey_save(const char *path, const void *data, size_t length);
 

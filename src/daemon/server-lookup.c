@@ -42,7 +42,7 @@
 struct pa_dbusobj_server_lookup {
     pa_core *core;
     pa_dbus_connection *conn;
-    pa_bool_t path_registered;
+    bool path_registered;
 };
 
 static const char introspection[] =
@@ -82,7 +82,7 @@ static void unregister_cb(DBusConnection *conn, void *user_data) {
     pa_assert(sl);
     pa_assert(sl->path_registered);
 
-    sl->path_registered = FALSE;
+    sl->path_registered = false;
 }
 
 static DBusHandlerResult handle_introspect(DBusConnection *conn, DBusMessage *msg, pa_dbusobj_server_lookup *sl) {
@@ -115,7 +115,6 @@ finish:
 
 enum get_address_result_t {
     SUCCESS,
-    FAILED_TO_LOAD_CLIENT_CONF,
     SERVER_FROM_TYPE_FAILED
 };
 
@@ -126,10 +125,7 @@ static enum get_address_result_t get_address(pa_server_type_t server_type, char 
 
     *address = NULL;
 
-    if (pa_client_conf_load(conf, NULL) < 0) {
-        r = FAILED_TO_LOAD_CLIENT_CONF;
-        goto finish;
-    }
+    pa_client_conf_load(conf, false, false);
 
     if (conf->default_dbus_server)
         *address = pa_xstrdup(conf->default_dbus_server);
@@ -171,18 +167,6 @@ static DBusHandlerResult handle_get_address(DBusConnection *conn, DBusMessage *m
             }
             if (!dbus_message_iter_close_container(&msg_iter, &variant_iter)) {
                 r = DBUS_HANDLER_RESULT_NEED_MEMORY;
-                goto finish;
-            }
-            if (!dbus_connection_send(conn, reply, NULL)) {
-                r = DBUS_HANDLER_RESULT_NEED_MEMORY;
-                goto finish;
-            }
-            r = DBUS_HANDLER_RESULT_HANDLED;
-            goto finish;
-
-        case FAILED_TO_LOAD_CLIENT_CONF:
-            if (!(reply = dbus_message_new_error(msg, "org.pulseaudio.ClientConfLoadError", "Failed to load client.conf."))) {
-                r = DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
                 goto finish;
             }
             if (!dbus_connection_send(conn, reply, NULL)) {
@@ -398,18 +382,6 @@ static DBusHandlerResult handle_get_all(DBusConnection *conn, DBusMessage *msg, 
             r = DBUS_HANDLER_RESULT_HANDLED;
             goto finish;
 
-        case FAILED_TO_LOAD_CLIENT_CONF:
-            if (!(reply = dbus_message_new_error(msg, "org.pulseaudio.ClientConfLoadError", "Failed to load client.conf."))) {
-                r = DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-                goto finish;
-            }
-            if (!dbus_connection_send(conn, reply, NULL)) {
-                r = DBUS_HANDLER_RESULT_NEED_MEMORY;
-                goto finish;
-            }
-            r = DBUS_HANDLER_RESULT_HANDLED;
-            goto finish;
-
         case SERVER_FROM_TYPE_FAILED:
             if (!(reply = dbus_message_new_error(msg, DBUS_ERROR_FAILED, "PulseAudio internal error: get_dbus_server_from_type() failed."))) {
                 r = DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
@@ -482,7 +454,7 @@ pa_dbusobj_server_lookup *pa_dbusobj_server_lookup_new(pa_core *c) {
 
     sl = pa_xnew(pa_dbusobj_server_lookup, 1);
     sl->core = c;
-    sl->path_registered = FALSE;
+    sl->path_registered = false;
 
     if (!(sl->conn = pa_dbus_bus_get(c, DBUS_BUS_SESSION, &error)) || dbus_error_is_set(&error)) {
         pa_log_warn("Unable to contact D-Bus: %s: %s", error.name, error.message);
@@ -494,7 +466,7 @@ pa_dbusobj_server_lookup *pa_dbusobj_server_lookup_new(pa_core *c) {
         goto fail;
     }
 
-    sl->path_registered = TRUE;
+    sl->path_registered = true;
 
     return sl;
 

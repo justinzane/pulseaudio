@@ -70,19 +70,19 @@ static char *device = NULL;
 
 static SNDFILE* sndfile = NULL;
 
-static pa_bool_t verbose = FALSE;
+static bool verbose = false;
 static pa_volume_t volume = PA_VOLUME_NORM;
-static pa_bool_t volume_is_set = FALSE;
+static bool volume_is_set = false;
 
 static pa_sample_spec sample_spec = {
     .format = PA_SAMPLE_S16LE,
     .rate = 44100,
     .channels = 2
 };
-static pa_bool_t sample_spec_set = FALSE;
+static bool sample_spec_set = false;
 
 static pa_channel_map channel_map;
-static pa_bool_t channel_map_set = FALSE;
+static bool channel_map_set = false;
 
 static sf_count_t (*readf_function)(SNDFILE *_sndfile, void *ptr, sf_count_t frames) = NULL;
 static sf_count_t (*writef_function)(SNDFILE *_sndfile, const void *ptr, sf_count_t frames) = NULL;
@@ -92,8 +92,10 @@ static pa_stream_flags_t flags = 0;
 static size_t latency = 0, process_time = 0;
 static int32_t latency_msec = 0, process_time_msec = 0;
 
-static pa_bool_t raw = TRUE;
+static bool raw = true;
 static int file_format = -1;
+
+static uint32_t monitor_stream = PA_INVALID_INDEX;
 
 static uint32_t cork_requests = 0;
 
@@ -354,10 +356,10 @@ static void stream_state_callback(pa_stream *s, void *userdata) {
                         pa_sample_spec_snprint(sst, sizeof(sst), pa_stream_get_sample_spec(s)),
                         pa_channel_map_snprint(cmt, sizeof(cmt), pa_stream_get_channel_map(s)));
 
-                pa_log(_("Connected to device %s (%u, %ssuspended)."),
+                pa_log(_("Connected to device %s (index: %u, suspended: %s)."),
                         pa_stream_get_device_name(s),
                         pa_stream_get_device_index(s),
-                        pa_stream_is_suspended(s) ? "" : "not ");
+                        pa_yes_no(pa_stream_is_suspended(s)));
             }
 
             break;
@@ -508,12 +510,15 @@ static void context_state_callback(pa_context *c, void *userdata) {
                 }
 
             } else {
+                if (monitor_stream != PA_INVALID_INDEX && (pa_stream_set_monitor_stream(stream, monitor_stream) < 0)) {
+                    pa_log(_("Failed to set monitor stream: %s"), pa_strerror(pa_context_errno(c)));
+                    goto fail;
+                }
                 if (pa_stream_connect_record(stream, device, &buffer_attr, flags) < 0) {
                     pa_log(_("pa_stream_connect_record() failed: %s"), pa_strerror(pa_context_errno(c)));
                     goto fail;
                 }
             }
-
             break;
         }
 
@@ -682,12 +687,12 @@ static void help(const char *argv0) {
              "      --channels=CHANNELS               The number of channels, 1 for mono, 2 for stereo\n"
              "                                        (defaults to 2)\n"
              "      --channel-map=CHANNELMAP          Channel map to use instead of the default\n"
-             "      --fix-format                      Take the sample format from the sink the stream is\n"
+             "      --fix-format                      Take the sample format from the sink/source the stream is\n"
              "                                        being connected to.\n"
-             "      --fix-rate                        Take the sampling rate from the sink the stream is\n"
+             "      --fix-rate                        Take the sampling rate from the sink/source the stream is\n"
              "                                        being connected to.\n"
              "      --fix-channels                    Take the number of channels and the channel map\n"
-             "                                        from the sink the stream is being connected to.\n"
+             "                                        from the sink/source the stream is being connected to.\n"
              "      --no-remix                        Don't upmix or downmix channels.\n"
              "      --no-remap                        Map channels by index instead of name.\n"
              "      --latency=BYTES                   Request the specified latency in bytes.\n"
@@ -696,9 +701,10 @@ static void help(const char *argv0) {
              "      --process-time-msec=MSEC          Request the specified process time per request in msec.\n"
              "      --property=PROPERTY=VALUE         Set the specified property to the specified value.\n"
              "      --raw                             Record/play raw PCM data.\n"
-             "      --passthrough                     passthrough data \n"
+             "      --passthrough                     Passthrough data.\n"
              "      --file-format[=FFORMAT]           Record/play formatted PCM data.\n"
-             "      --list-file-formats               List available file formats.\n")
+             "      --list-file-formats               List available file formats.\n"
+             "      --monitor-stream=INDEX            Record from the sink input with index INDEX.\n")
            , argv0);
 }
 
@@ -723,7 +729,8 @@ enum {
     ARG_FILE_FORMAT,
     ARG_LIST_FILE_FORMATS,
     ARG_LATENCY_MSEC,
-    ARG_PROCESS_TIME_MSEC
+    ARG_PROCESS_TIME_MSEC,
+    ARG_MONITOR_STREAM,
 };
 
 int main(int argc, char *argv[]) {
@@ -764,6 +771,7 @@ int main(int argc, char *argv[]) {
         {"list-file-formats", 0, NULL, ARG_LIST_FILE_FORMATS},
         {"latency-msec", 1, NULL, ARG_LATENCY_MSEC},
         {"process-time-msec", 1, NULL, ARG_PROCESS_TIME_MSEC},
+        {"monitor-stream", 1, NULL, ARG_MONITOR_STREAM},
         {NULL,           0, NULL, 0}
     };
 
@@ -776,16 +784,16 @@ int main(int argc, char *argv[]) {
 
     if (strstr(bn, "play")) {
         mode = PLAYBACK;
-        raw = FALSE;
+        raw = false;
     } else if (strstr(bn, "record")) {
         mode = RECORD;
-        raw = FALSE;
+        raw = false;
     } else if (strstr(bn, "cat")) {
         mode = PLAYBACK;
-        raw = TRUE;
+        raw = true;
     } else if (strstr(bn, "rec") || strstr(bn, "mon")) {
         mode = RECORD;
-        raw = TRUE;
+        raw = true;
     }
 
     proplist = pa_proplist_new();
@@ -863,23 +871,23 @@ int main(int argc, char *argv[]) {
             case ARG_VOLUME: {
                 int v = atoi(optarg);
                 volume = v < 0 ? 0U : (pa_volume_t) v;
-                volume_is_set = TRUE;
+                volume_is_set = true;
                 break;
             }
 
             case ARG_CHANNELS:
                 sample_spec.channels = (uint8_t) atoi(optarg);
-                sample_spec_set = TRUE;
+                sample_spec_set = true;
                 break;
 
             case ARG_SAMPLEFORMAT:
                 sample_spec.format = pa_parse_sample_format(optarg);
-                sample_spec_set = TRUE;
+                sample_spec_set = true;
                 break;
 
             case ARG_SAMPLERATE:
                 sample_spec.rate = (uint32_t) atoi(optarg);
-                sample_spec_set = TRUE;
+                sample_spec_set = true;
                 break;
 
             case ARG_CHANNELMAP:
@@ -888,7 +896,7 @@ int main(int argc, char *argv[]) {
                     goto quit;
                 }
 
-                channel_map_set = TRUE;
+                channel_map_set = true;
                 break;
 
             case ARG_FIX_CHANNELS:
@@ -955,7 +963,7 @@ int main(int argc, char *argv[]) {
             }
 
             case ARG_RAW:
-                raw = TRUE;
+                raw = true;
                 break;
 
             case ARG_PASSTHROUGH:
@@ -970,13 +978,20 @@ int main(int argc, char *argv[]) {
                     }
                 }
 
-                raw = FALSE;
+                raw = false;
                 break;
 
             case ARG_LIST_FILE_FORMATS:
                 pa_sndfile_dump_formats();
                 ret = 0;
                 goto quit;
+
+            case ARG_MONITOR_STREAM:
+                if (pa_atou(optarg, &monitor_stream) < 0) {
+                    pa_log(_("Failed to parse the argument for --monitor-stream"));
+                    goto quit;
+                }
+                break;
 
             default:
                 goto quit;
@@ -1055,7 +1070,7 @@ int main(int argc, char *argv[]) {
                 pa_log(_("Failed to determine sample specification from file."));
                 goto quit;
             }
-            sample_spec_set = TRUE;
+            sample_spec_set = true;
 
             if (!channel_map_set) {
                 /* Allow the user to overwrite the channel map on the command line */
@@ -1063,7 +1078,7 @@ int main(int argc, char *argv[]) {
                     if (sample_spec.channels > 2)
                         pa_log(_("Warning: Failed to determine channel map from file."));
                 } else
-                    channel_map_set = TRUE;
+                    channel_map_set = true;
             }
         }
     }

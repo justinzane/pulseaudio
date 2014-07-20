@@ -114,7 +114,7 @@ static void play_sample_ack_callback(pa_pdispatch *pd, uint32_t command, uint32_
         goto finish;
 
     if (command != PA_COMMAND_REPLY) {
-        if (pa_context_handle_error(o->context, command, t, FALSE) < 0)
+        if (pa_context_handle_error(o->context, command, t, false) < 0)
             goto finish;
 
         success = 0;
@@ -147,7 +147,7 @@ static void play_sample_with_proplist_ack_callback(pa_pdispatch *pd, uint32_t co
         goto finish;
 
     if (command != PA_COMMAND_REPLY) {
-        if (pa_context_handle_error(o->context, command, t, FALSE) < 0)
+        if (pa_context_handle_error(o->context, command, t, false) < 0)
             goto finish;
 
         idx = PA_INVALID_INDEX;
@@ -166,7 +166,6 @@ finish:
     pa_operation_done(o);
     pa_operation_unref(o);
 }
-
 
 pa_operation *pa_context_play_sample(pa_context *c, const char *name, const char *dev, pa_volume_t volume, pa_context_success_cb_t cb, void *userdata) {
     pa_operation *o;

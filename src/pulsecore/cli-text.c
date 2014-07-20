@@ -116,8 +116,7 @@ static const char *available_to_string(pa_available_t a) {
     }
 }
 
-static void append_port_list(pa_strbuf *s, pa_hashmap *ports)
-{
+static void append_port_list(pa_strbuf *s, pa_hashmap *ports) {
     pa_device_port *p;
     void *state;
 
@@ -247,15 +246,12 @@ char *pa_sink_list_to_string(pa_core *c) {
 
     PA_IDXSET_FOREACH(sink, c->sinks, idx) {
         char ss[PA_SAMPLE_SPEC_SNPRINT_MAX],
-            cv[PA_CVOLUME_SNPRINT_MAX],
-            cvdb[PA_SW_CVOLUME_SNPRINT_DB_MAX],
-            v[PA_VOLUME_SNPRINT_MAX],
-            vdb[PA_SW_VOLUME_SNPRINT_DB_MAX],
+            cv[PA_CVOLUME_SNPRINT_VERBOSE_MAX],
+            v[PA_VOLUME_SNPRINT_VERBOSE_MAX],
             cm[PA_CHANNEL_MAP_SNPRINT_MAX], *t;
         const char *cmn;
 
         cmn = pa_channel_map_to_pretty_name(&sink->channel_map);
-
 
         pa_strbuf_printf(
             s,
@@ -266,9 +262,9 @@ char *pa_sink_list_to_string(pa_core *c) {
             "\tstate: %s\n"
             "\tsuspend cause: %s%s%s%s\n"
             "\tpriority: %u\n"
-            "\tvolume: %s%s%s\n"
+            "\tvolume: %s\n"
             "\t        balance %0.2f\n"
-            "\tbase volume: %s%s%s\n"
+            "\tbase volume: %s\n"
             "\tvolume steps: %u\n"
             "\tmuted: %s\n"
             "\tcurrent latency: %0.2f ms\n"
@@ -297,15 +293,15 @@ char *pa_sink_list_to_string(pa_core *c) {
             sink->suspend_cause & PA_SUSPEND_IDLE ? "IDLE " : "",
             sink->suspend_cause & PA_SUSPEND_SESSION ? "SESSION" : "",
             sink->priority,
-            pa_cvolume_snprint(cv, sizeof(cv), pa_sink_get_volume(sink, FALSE)),
-            sink->flags & PA_SINK_DECIBEL_VOLUME ? "\n\t        " : "",
-            sink->flags & PA_SINK_DECIBEL_VOLUME ? pa_sw_cvolume_snprint_dB(cvdb, sizeof(cvdb), pa_sink_get_volume(sink, FALSE)) : "",
-            pa_cvolume_get_balance(pa_sink_get_volume(sink, FALSE), &sink->channel_map),
-            pa_volume_snprint(v, sizeof(v), sink->base_volume),
-            sink->flags & PA_SINK_DECIBEL_VOLUME ? "\n\t             " : "",
-            sink->flags & PA_SINK_DECIBEL_VOLUME ? pa_sw_volume_snprint_dB(vdb, sizeof(vdb), sink->base_volume) : "",
+            pa_cvolume_snprint_verbose(cv,
+                                       sizeof(cv),
+                                       pa_sink_get_volume(sink, false),
+                                       &sink->channel_map,
+                                       sink->flags & PA_SINK_DECIBEL_VOLUME),
+            pa_cvolume_get_balance(pa_sink_get_volume(sink, false), &sink->channel_map),
+            pa_volume_snprint_verbose(v, sizeof(v), sink->base_volume, sink->flags & PA_SINK_DECIBEL_VOLUME),
             sink->n_volume_steps,
-            pa_yes_no(pa_sink_get_mute(sink, FALSE)),
+            pa_yes_no(pa_sink_get_mute(sink, false)),
             (double) pa_sink_get_latency(sink) / (double) PA_USEC_PER_MSEC,
             (unsigned long) pa_sink_get_max_request(sink) / 1024,
             (unsigned long) pa_sink_get_max_rewind(sink) / 1024,
@@ -368,10 +364,8 @@ char *pa_source_list_to_string(pa_core *c) {
 
     PA_IDXSET_FOREACH(source, c->sources, idx) {
         char ss[PA_SAMPLE_SPEC_SNPRINT_MAX],
-            cv[PA_CVOLUME_SNPRINT_MAX],
-            cvdb[PA_SW_CVOLUME_SNPRINT_DB_MAX],
-            v[PA_VOLUME_SNPRINT_MAX],
-            vdb[PA_SW_VOLUME_SNPRINT_DB_MAX],
+            cv[PA_CVOLUME_SNPRINT_VERBOSE_MAX],
+            v[PA_VOLUME_SNPRINT_VERBOSE_MAX],
             cm[PA_CHANNEL_MAP_SNPRINT_MAX], *t;
         const char *cmn;
 
@@ -386,9 +380,9 @@ char *pa_source_list_to_string(pa_core *c) {
             "\tstate: %s\n"
             "\tsuspend cause: %s%s%s%s\n"
             "\tpriority: %u\n"
-            "\tvolume: %s%s%s\n"
+            "\tvolume: %s\n"
             "\t        balance %0.2f\n"
-            "\tbase volume: %s%s%s\n"
+            "\tbase volume: %s\n"
             "\tvolume steps: %u\n"
             "\tmuted: %s\n"
             "\tcurrent latency: %0.2f ms\n"
@@ -414,15 +408,15 @@ char *pa_source_list_to_string(pa_core *c) {
             source->suspend_cause & PA_SUSPEND_IDLE ? "IDLE " : "",
             source->suspend_cause & PA_SUSPEND_SESSION ? "SESSION" : "",
             source->priority,
-            pa_cvolume_snprint(cv, sizeof(cv), pa_source_get_volume(source, FALSE)),
-            source->flags & PA_SOURCE_DECIBEL_VOLUME ? "\n\t        " : "",
-            source->flags & PA_SOURCE_DECIBEL_VOLUME ? pa_sw_cvolume_snprint_dB(cvdb, sizeof(cvdb), pa_source_get_volume(source, FALSE)) : "",
-            pa_cvolume_get_balance(pa_source_get_volume(source, FALSE), &source->channel_map),
-            pa_volume_snprint(v, sizeof(v), source->base_volume),
-            source->flags & PA_SOURCE_DECIBEL_VOLUME ? "\n\t             " : "",
-            source->flags & PA_SOURCE_DECIBEL_VOLUME ? pa_sw_volume_snprint_dB(vdb, sizeof(vdb), source->base_volume) : "",
+            pa_cvolume_snprint_verbose(cv,
+                                       sizeof(cv),
+                                       pa_source_get_volume(source, false),
+                                       &source->channel_map,
+                                       source->flags & PA_SOURCE_DECIBEL_VOLUME),
+            pa_cvolume_get_balance(pa_source_get_volume(source, false), &source->channel_map),
+            pa_volume_snprint_verbose(v, sizeof(v), source->base_volume, source->flags & PA_SOURCE_DECIBEL_VOLUME),
             source->n_volume_steps,
-            pa_yes_no(pa_source_get_mute(source, FALSE)),
+            pa_yes_no(pa_source_get_mute(source, false)),
             (double) pa_source_get_latency(source) / PA_USEC_PER_MSEC,
             (unsigned long) pa_source_get_max_rewind(source) / 1024,
             pa_sample_spec_snprint(ss, sizeof(ss), &source->sample_spec),
@@ -471,7 +465,6 @@ char *pa_source_list_to_string(pa_core *c) {
     return pa_strbuf_tostring_free(s);
 }
 
-
 char *pa_source_output_list_to_string(pa_core *c) {
     pa_strbuf *s;
     pa_source_output *o;
@@ -486,10 +479,10 @@ char *pa_source_output_list_to_string(pa_core *c) {
 
     s = pa_strbuf_new();
 
-    pa_strbuf_printf(s, "%u source outputs(s) available.\n", pa_idxset_size(c->source_outputs));
+    pa_strbuf_printf(s, "%u source output(s) available.\n", pa_idxset_size(c->source_outputs));
 
     PA_IDXSET_FOREACH(o, c->source_outputs, idx) {
-        char ss[PA_SAMPLE_SPEC_SNPRINT_MAX], cvdb[PA_SW_CVOLUME_SNPRINT_DB_MAX], cv[PA_CVOLUME_SNPRINT_MAX], cm[PA_CHANNEL_MAP_SNPRINT_MAX], *t, clt[28];
+        char ss[PA_SAMPLE_SPEC_SNPRINT_MAX], cv[PA_CVOLUME_SNPRINT_VERBOSE_MAX], cm[PA_CHANNEL_MAP_SNPRINT_MAX], *t, clt[28];
         pa_usec_t cl;
         const char *cmn;
         pa_cvolume v;
@@ -505,14 +498,12 @@ char *pa_source_output_list_to_string(pa_core *c) {
         pa_assert(o->source);
 
         if (pa_source_output_is_volume_readable(o)) {
-            pa_source_output_get_volume(o, &v, TRUE);
-            volume_str = pa_sprintf_malloc("%s\n\t        %s\n\t        balance %0.2f",
-                                           pa_cvolume_snprint(cv, sizeof(cv), &v),
-                                           pa_sw_cvolume_snprint_dB(cvdb, sizeof(cvdb), &v),
+            pa_source_output_get_volume(o, &v, true);
+            volume_str = pa_sprintf_malloc("%s\n\t        balance %0.2f",
+                                           pa_cvolume_snprint_verbose(cv, sizeof(cv), &v, &o->channel_map, true),
                                            pa_cvolume_get_balance(&v, &o->channel_map));
         } else
             volume_str = pa_xstrdup("n/a");
-
 
         pa_strbuf_printf(
             s,
@@ -545,7 +536,7 @@ char *pa_source_output_list_to_string(pa_core *c) {
             state_table[pa_source_output_get_state(o)],
             o->source->index, o->source->name,
             volume_str,
-            pa_yes_no(pa_source_output_get_mute(o)),
+            pa_yes_no(o->muted),
             (double) pa_source_output_get_latency(o, NULL) / PA_USEC_PER_MSEC,
             clt,
             pa_sample_spec_snprint(ss, sizeof(ss), &o->sample_spec),
@@ -589,7 +580,7 @@ char *pa_sink_input_list_to_string(pa_core *c) {
     pa_strbuf_printf(s, "%u sink input(s) available.\n", pa_idxset_size(c->sink_inputs));
 
     PA_IDXSET_FOREACH(i, c->sink_inputs, idx) {
-        char ss[PA_SAMPLE_SPEC_SNPRINT_MAX], cvdb[PA_SW_CVOLUME_SNPRINT_DB_MAX], cv[PA_CVOLUME_SNPRINT_MAX], cm[PA_CHANNEL_MAP_SNPRINT_MAX], *t, clt[28];
+        char ss[PA_SAMPLE_SPEC_SNPRINT_MAX], cv[PA_CVOLUME_SNPRINT_MAX], cm[PA_CHANNEL_MAP_SNPRINT_MAX], *t, clt[28];
         pa_usec_t cl;
         const char *cmn;
         pa_cvolume v;
@@ -605,10 +596,9 @@ char *pa_sink_input_list_to_string(pa_core *c) {
         pa_assert(i->sink);
 
         if (pa_sink_input_is_volume_readable(i)) {
-            pa_sink_input_get_volume(i, &v, TRUE);
-            volume_str = pa_sprintf_malloc("%s\n\t        %s\n\t        balance %0.2f",
-                                           pa_cvolume_snprint(cv, sizeof(cv), &v),
-                                           pa_sw_cvolume_snprint_dB(cvdb, sizeof(cvdb), &v),
+            pa_sink_input_get_volume(i, &v, true);
+            volume_str = pa_sprintf_malloc("%s\n\t        balance %0.2f",
+                                           pa_cvolume_snprint_verbose(cv, sizeof(cv), &v, &i->channel_map, true),
                                            pa_cvolume_get_balance(&v, &i->channel_map));
         } else
             volume_str = pa_xstrdup("n/a");
@@ -644,7 +634,7 @@ char *pa_sink_input_list_to_string(pa_core *c) {
             state_table[pa_sink_input_get_state(i)],
             i->sink->index, i->sink->name,
             volume_str,
-            pa_yes_no(pa_sink_input_get_mute(i)),
+            pa_yes_no(i->muted),
             (double) pa_sink_input_get_latency(i, NULL) / PA_USEC_PER_MSEC,
             clt,
             pa_sample_spec_snprint(ss, sizeof(ss), &i->sample_spec),
@@ -682,7 +672,7 @@ char *pa_scache_list_to_string(pa_core *c) {
 
         PA_IDXSET_FOREACH(e, c->scache, idx) {
             double l = 0;
-            char ss[PA_SAMPLE_SPEC_SNPRINT_MAX] = "n/a", cv[PA_CVOLUME_SNPRINT_MAX], cvdb[PA_SW_CVOLUME_SNPRINT_DB_MAX], cm[PA_CHANNEL_MAP_SNPRINT_MAX] = "n/a", *t;
+            char ss[PA_SAMPLE_SPEC_SNPRINT_MAX] = "n/a", cv[PA_CVOLUME_SNPRINT_MAX], cm[PA_CHANNEL_MAP_SNPRINT_MAX] = "n/a", *t;
             const char *cmn;
 
             cmn = pa_channel_map_to_pretty_name(&e->channel_map);
@@ -702,7 +692,6 @@ char *pa_scache_list_to_string(pa_core *c) {
                 "\tlength: %lu\n"
                 "\tduration: %0.1f s\n"
                 "\tvolume: %s\n"
-                "\t        %s\n"
                 "\t        balance %0.2f\n"
                 "\tlazy: %s\n"
                 "\tfilename: <%s>\n",
@@ -714,8 +703,7 @@ char *pa_scache_list_to_string(pa_core *c) {
                 cmn ? cmn : "",
                 (long unsigned)(e->memchunk.memblock ? e->memchunk.length : 0),
                 l,
-                e->volume_is_set ? pa_cvolume_snprint(cv, sizeof(cv), &e->volume) : "n/a",
-                e->volume_is_set ? pa_sw_cvolume_snprint_dB(cvdb, sizeof(cvdb), &e->volume) : "n/a",
+                e->volume_is_set ? pa_cvolume_snprint_verbose(cv, sizeof(cv), &e->volume, &e->channel_map, true) : "n/a",
                 (e->memchunk.memblock && e->volume_is_set) ? pa_cvolume_get_balance(&e->volume, &e->channel_map) : 0.0f,
                 pa_yes_no(e->lazy),
                 e->filename ? e->filename : "n/a");

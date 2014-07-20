@@ -82,11 +82,11 @@ START_TEST (memblock_test) {
 
     const char txt[] = "This is a test!";
 
-    pool_a = pa_mempool_new(TRUE, 0);
+    pool_a = pa_mempool_new(true, 0);
     fail_unless(pool_a != NULL);
-    pool_b = pa_mempool_new(TRUE, 0);
+    pool_b = pa_mempool_new(true, 0);
     fail_unless(pool_b != NULL);
-    pool_c = pa_mempool_new(TRUE, 0);
+    pool_c = pa_mempool_new(true, 0);
     fail_unless(pool_c != NULL);
 
     pa_mempool_get_shm_id(pool_a, &id_a);
@@ -130,7 +130,7 @@ START_TEST (memblock_test) {
 
         pa_log("A: Memory block exported as %u", id);
 
-        mb_b = pa_memimport_get(import_b, id, shm_id, offset, size);
+        mb_b = pa_memimport_get(import_b, id, shm_id, offset, size, false);
         fail_unless(mb_b != NULL);
         r = pa_memexport_put(export_b, mb_b, &id, &shm_id, &offset, &size);
         fail_unless(r >= 0);
@@ -139,7 +139,7 @@ START_TEST (memblock_test) {
 
         pa_log("B: Memory block exported as %u", id);
 
-        mb_c = pa_memimport_get(import_c, id, shm_id, offset, size);
+        mb_c = pa_memimport_get(import_c, id, shm_id, offset, size, false);
         fail_unless(mb_c != NULL);
         x = pa_memblock_acquire(mb_c);
         pa_log_debug("1 data=%s", x);

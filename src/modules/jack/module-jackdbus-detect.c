@@ -38,7 +38,7 @@
 
 PA_MODULE_AUTHOR("David Henningsson");
 PA_MODULE_DESCRIPTION("Adds JACK sink/source ports when JACK is started");
-PA_MODULE_LOAD_ONCE(TRUE);
+PA_MODULE_LOAD_ONCE(true);
 PA_MODULE_VERSION(PACKAGE_VERSION);
 PA_MODULE_USAGE(
     "channels=<number of channels> "
@@ -48,18 +48,18 @@ PA_MODULE_USAGE(
 #define JACK_INTERFACE_NAME "org.jackaudio.JackControl"
 #define JACK_INTERFACE_PATH "/org/jackaudio/Controller"
 
-#define SERVICE_FILTER				\
-	"type='signal',"			\
-	"sender='" DBUS_SERVICE_DBUS "',"	\
-	"interface='" DBUS_INTERFACE_DBUS "',"	\
-	"member='NameOwnerChanged',"		\
-	"arg0='" JACK_SERVICE_NAME "'"
+#define SERVICE_FILTER                          \
+        "type='signal',"                        \
+        "sender='" DBUS_SERVICE_DBUS "',"       \
+        "interface='" DBUS_INTERFACE_DBUS "',"  \
+        "member='NameOwnerChanged',"            \
+        "arg0='" JACK_SERVICE_NAME "'"
 
-#define RUNNING_FILTER(_a)			\
-	"type='signal',"			\
-	"sender='" JACK_SERVICE_NAME "',"	\
-	"interface='" JACK_INTERFACE_NAME "',"	\
-	"member='" _a "'"
+#define RUNNING_FILTER(_a)                      \
+        "type='signal',"                        \
+        "sender='" JACK_SERVICE_NAME "',"       \
+        "interface='" JACK_INTERFACE_NAME "',"  \
+        "member='" _a "'"
 
 static const char* const valid_modargs[] = {
     "channels",
@@ -76,19 +76,17 @@ static const char* const modnames[JACK_SS_COUNT] = {
     "module-jack-source"
 };
 
-
 struct userdata {
     pa_module *module;
     pa_core *core;
     pa_dbus_connection *connection;
-    pa_bool_t filter_added, match_added;
-    pa_bool_t is_service_started;
-    pa_bool_t autoconnect_ports;
+    bool filter_added, match_added;
+    bool is_service_started;
+    bool autoconnect_ports;
     uint32_t channels;
     /* Using index here protects us from module unloading without us knowing */
     int jack_module_index[JACK_SS_COUNT];
 };
-
 
 static void ensure_ports_stopped(struct userdata* u) {
     int i;
@@ -96,7 +94,7 @@ static void ensure_ports_stopped(struct userdata* u) {
 
     for (i = 0; i < JACK_SS_COUNT; i++)
         if (u->jack_module_index[i]) {
-            pa_module_unload_request_by_index(u->core, u->jack_module_index[i], TRUE);
+            pa_module_unload_request_by_index(u->core, u->jack_module_index[i], true);
             u->jack_module_index[i] = 0;
             pa_log_info("Stopped %s.", modnames[i]);
         }
@@ -127,11 +125,10 @@ static void ensure_ports_started(struct userdata* u) {
         }
 }
 
-
-static pa_bool_t check_service_started(struct userdata* u) {
+static bool check_service_started(struct userdata* u) {
     DBusError error;
     DBusMessage *m = NULL, *reply = NULL;
-    pa_bool_t new_status = FALSE;
+    bool new_status = false;
     dbus_bool_t call_result;
     pa_assert(u);
 
@@ -233,7 +230,7 @@ int pa__init(pa_module *m) {
     m->userdata = u = pa_xnew0(struct userdata, 1);
     u->core = m->core;
     u->module = m;
-    u->autoconnect_ports = TRUE;
+    u->autoconnect_ports = true;
     u->channels = 0;
 
     if (pa_modargs_get_value_boolean(ma, "connect", &u->autoconnect_ports) < 0) {
@@ -241,7 +238,7 @@ int pa__init(pa_module *m) {
         goto fail;
     }
 
-    if (pa_modargs_get_value_u32(ma, "channels", &u->channels) < 0 || u->channels > PA_CHANNELS_MAX) {
+    if (pa_modargs_get_value_u32(ma, "channels", &u->channels) < 0 || !pa_channels_valid(u->channels)) {
         pa_log("Failed to parse channels= argument.");
         goto fail;
     }

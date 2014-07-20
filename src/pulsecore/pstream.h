@@ -31,13 +31,14 @@
 #include <pulsecore/packet.h>
 #include <pulsecore/memblock.h>
 #include <pulsecore/iochannel.h>
+#include <pulsecore/srbchannel.h>
 #include <pulsecore/memchunk.h>
 #include <pulsecore/creds.h>
 #include <pulsecore/macro.h>
 
 typedef struct pa_pstream pa_pstream;
 
-typedef void (*pa_pstream_packet_cb_t)(pa_pstream *p, pa_packet *packet, const pa_creds *creds, void *userdata);
+typedef void (*pa_pstream_packet_cb_t)(pa_pstream *p, pa_packet *packet, const pa_ancil *ancil, void *userdata);
 typedef void (*pa_pstream_memblock_cb_t)(pa_pstream *p, uint32_t channel, int64_t offset, pa_seek_mode_t seek, const pa_memchunk *chunk, void *userdata);
 typedef void (*pa_pstream_notify_cb_t)(pa_pstream *p, void *userdata);
 typedef void (*pa_pstream_block_id_cb_t)(pa_pstream *p, uint32_t block_id, void *userdata);
@@ -49,7 +50,7 @@ void pa_pstream_unref(pa_pstream*p);
 
 void pa_pstream_unlink(pa_pstream *p);
 
-void pa_pstream_send_packet(pa_pstream*p, pa_packet *packet, const pa_creds *creds);
+void pa_pstream_send_packet(pa_pstream*p, pa_packet *packet, const pa_ancil *ancil);
 void pa_pstream_send_memblock(pa_pstream*p, uint32_t channel, int64_t offset, pa_seek_mode_t seek, const pa_memchunk *chunk);
 void pa_pstream_send_release(pa_pstream *p, uint32_t block_id);
 void pa_pstream_send_revoke(pa_pstream *p, uint32_t block_id);
@@ -61,9 +62,13 @@ void pa_pstream_set_die_callback(pa_pstream *p, pa_pstream_notify_cb_t cb, void 
 void pa_pstream_set_release_callback(pa_pstream *p, pa_pstream_block_id_cb_t cb, void *userdata);
 void pa_pstream_set_revoke_callback(pa_pstream *p, pa_pstream_block_id_cb_t cb, void *userdata);
 
-pa_bool_t pa_pstream_is_pending(pa_pstream *p);
+bool pa_pstream_is_pending(pa_pstream *p);
 
-void pa_pstream_enable_shm(pa_pstream *p, pa_bool_t enable);
-pa_bool_t pa_pstream_get_shm(pa_pstream *p);
+void pa_pstream_enable_shm(pa_pstream *p, bool enable);
+bool pa_pstream_get_shm(pa_pstream *p);
+
+/* Enables shared ringbuffer channel. Note that the srbchannel is now owned by the pstream.
+   Setting srb to NULL will free any existing srbchannel. */
+void pa_pstream_set_srbchannel(pa_pstream *p, pa_srbchannel *srb);
 
 #endif
