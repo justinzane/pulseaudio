@@ -29,12 +29,13 @@ typedef struct pa_remap pa_remap_t;
 
 typedef void (*pa_do_remap_func_t) (pa_remap_t *m, void *d, const void *s, unsigned n);
 
+/** \struct  pa_remap */
 struct pa_remap {
-    pa_sample_format_t *format;
-    pa_sample_spec *i_ss, *o_ss;
-    float map_table_f[PA_CHANNELS_MAX][PA_CHANNELS_MAX];
-    int32_t map_table_i[PA_CHANNELS_MAX][PA_CHANNELS_MAX];
-    pa_do_remap_func_t do_remap;
+    pa_sample_format_t *format;                             /**< data type of samples */
+    pa_sample_spec *i_ss, *o_ss;                            /**< input rate+channels, output rate+channels */
+    float map_table_f[PA_CHANNELS_MAX][PA_CHANNELS_MAX];    /**< correlation between in and out maps */
+    int32_t map_table_i[PA_CHANNELS_MAX][PA_CHANNELS_MAX];  /**< correlation between in and out maps */
+    pa_do_remap_func_t do_remap;                            /**< function pointer to actual remapping function */
 };
 
 void pa_init_remap (pa_remap_t *m);
@@ -42,7 +43,16 @@ void pa_init_remap (pa_remap_t *m);
 /* custom installation of init functions */
 typedef void (*pa_init_remap_func_t) (pa_remap_t *m);
 
+/**
+ * @fn      pa_get_init_remap_func
+ * @return  the initial remapping function
+ */
 pa_init_remap_func_t pa_get_init_remap_func(void);
+
+/**
+ * @fn      pa_set_init_remap_func
+ * @param   [in]    func    the initial remapping function
+ */
 void pa_set_init_remap_func(pa_init_remap_func_t func);
 
 #endif /* fooremapfoo */

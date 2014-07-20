@@ -31,6 +31,7 @@
 
 #include <stdio.h>
 #include <math.h>
+#include <pulse/gccmacro.h>
 #include <pulsecore/core-util.h>
 #include <pulsecore/sample-util.h>
 
@@ -154,7 +155,7 @@ typedef struct biquad_filter_map_4 {
  *          destination chunks are floats. working data and history data are updated during
  *          filtering.
  */
-__attribute__((hot)) void pa_biquad_chunk_4(struct biquad_filter_map_4 *fm,
+PA_GCC_HOT void pa_biquad_chunk_4(struct biquad_filter_map_4 *fm,
                                             /**< [in/out] pointer to a filter map.
                                              * the history and working data within the map
                                              * structure get updated during filtering. */
@@ -174,7 +175,7 @@ __attribute__((hot)) void pa_biquad_chunk_4(struct biquad_filter_map_4 *fm,
  * \note    \f[ y0= (b0 * w0 + b1 * w1 + b2 * w2) − (a1 * y1 + a2 * y2);\f]
  * \see     http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
  */
-__attribute__((hot)) void pa_biquad(struct biquad_data *bqdt,
+PA_GCC_HOT void pa_biquad(struct biquad_data *bqdt,
                                     /**< [in/out] pointer to the filter's working data */
                                     struct biquad_factors *bqfs,
                                     /**< [in] pointer to the coefficients */
@@ -303,7 +304,7 @@ void pa_del_biquad_filter_map_4(pa_biquad_filter_map_4 *bqfm
  * \brief   used by clients like modules to rewind the filters history buffer when the audio
  *          stream is rewound in pulse
  */
-__attribute__((hot)) void pa_biquad_rewind_filter(size_t rewind_frames,
+PA_GCC_HOT void pa_biquad_rewind_filter(size_t rewind_frames,
                                                   /**< [in/out] filter_map: the data structure being rewound */
                                                   pa_biquad_filter_map_4 *filter_map
                                                   /**< [in] rewind_frames: the number of frames to rewind.

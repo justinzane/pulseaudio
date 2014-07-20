@@ -25,7 +25,7 @@
  */
 #include <pulsecore/biquad-filter.h>
 
-__attribute__((hot)) void pa_biquad_chunk_4(struct biquad_filter_map_4 *fm, float *src,
+PA_GCC_HOT void pa_biquad_chunk_4(struct biquad_filter_map_4 *fm, float *src,
                                             float *dst, size_t num_frames, uint8_t num_chans) {
     size_t frm_idx, chan_idx;
     float *cur_sample, *dst_sample, *tmp_sample;
@@ -54,7 +54,7 @@ __attribute__((hot)) void pa_biquad_chunk_4(struct biquad_filter_map_4 *fm, floa
     }
 }
 
-__attribute__((hot)) void pa_biquad(struct biquad_data *bqdt,
+PA_GCC_HOT void pa_biquad(struct biquad_data *bqdt,
                                      struct biquad_factors *bqfs,
                                      struct biquad_history *bqhs,
                                      float *src,
@@ -235,7 +235,7 @@ void pa_del_biquad_filter_map_4(pa_biquad_filter_map_4 *bqfm) {
     free(bqfm);
 }
 
-__attribute__((hot)) void pa_biquad_rewind_filter(size_t rewind_frames,
+PA_GCC_HOT void pa_biquad_rewind_filter(size_t rewind_frames,
                                                pa_biquad_filter_map_4 *filter_map) {
     size_t i;
     pa_biquad_map_item_4 *cmi;

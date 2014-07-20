@@ -27,11 +27,11 @@ run_versioned() {
     if [ -e "`which $1$V 2> /dev/null`" ] ; then
         P="$1$V"
     else
-	if [ -e "`which $1-$2 2> /dev/null`" ] ; then
-	    P="$1-$2"
-	else
-	    P="$1"
-	fi
+    if [ -e "`which $1-$2 2> /dev/null`" ] ; then
+        P="$1-$2"
+    else
+        P="$1"
+    fi
     fi
 
     shift 2
@@ -41,9 +41,9 @@ run_versioned() {
 set -ex
 
 case $(uname) in
-	*Darwin*)
-		LIBTOOLIZE="glibtoolize"
-		;;
+    *Darwin*)
+        LIBTOOLIZE="glibtoolize"
+        ;;
 esac
 test "x$LIBTOOLIZE" = "x" && LIBTOOLIZE=libtoolize
 
@@ -98,7 +98,7 @@ else
     run_versioned automake "$VERSION" --copy --foreign --add-missing
 
     if test "x$NOCONFIGURE" = "x"; then
-        CFLAGS="$CFLAGS -g -O0" ./configure --sysconfdir=/etc --localstatedir=/var --enable-force-preopen "$@"
+        CFLAGS="-g -O0 $CFLAGS" ./configure --sysconfdir=/etc --localstatedir=/var --enable-force-preopen "$@"
         make clean
     fi
 fi

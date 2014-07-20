@@ -32,13 +32,13 @@ import struct
 import subprocess as sp
 
 Fs = 44100
-MAX_SAMPLES = Fs * 30
+max_samples = Fs * 30
 CHANS = 6
-FREQS = [249]# 39, 79, 119, 249]
+FREQS = [100] # 39, 79, 119, 249]
 
 COLORS = ["#7f0000", "#5f1f00", "#5f0f0f", "#7f001f", "#007f00", "#00007f"]
 
-SRC_FILE = "stereo_1760-28-440.wav"  # "./stereo_20-20000Hz.wav"
+SRC_FILE = "stereo_opposed-phase.wav"  # "./stereo_20-20000Hz.wav"
 REC_FILE = "./output/test-%d.pcm"
 PLOT_FILE = "./output/test_plot.png"
 CONF_SRC_FILE = "./lfe-lp.pa"
@@ -49,7 +49,13 @@ REC_CMD += "--channel-map=\"front-left,front-right,rear-left,rear-right,front-ce
 REC_CMD += "-d null.monitor -r > " + REC_FILE
 
 DAEMON_CMD = "../src/pulseaudio -n -F %s"
-KILL_CMD_1 = "../src/pulseaudio -k; /usr/bin/pulseaudio -k"
+VALGRIND_CMD = 'G_SLICE=always-malloc G_DEBUG=gc-friendly libtool --mode=execute valgrind --tool=memcheck --leak-check=full --show-reachable=yes --leak-resolution=high --num-callers=4 --track-origins=yes --read-var-info=yes --log-file=vgdump '
+VALGRIND_CMD += DAEMON_CMD
+CALLGRIND_CMD = 'G_SLICE=always-malloc G_DEBUG=gc-friendly libtool --mode=execute valgrind --tool=callgrind --auto=yes '
+CALLGRIND_CMD += DAEMON_CMD
+GDB_CMD = 'libtool --mode=execute gdb --args '
+GDB_CMD += DAEMON_CMD
+KILL_CMD_1 = "../src/pulseaudio -k; /usr/bin/pulseaudio -k; killall -9 lt-pulseaudio; killall -9 pulseaudio"
 KILL_CMD_3 = "killall lt-pacat"
 
 FREQ_RE = re.compile(r'lpfreq=[0-9.]+')
@@ -80,11 +86,11 @@ def run_test(f):
 
     # record
     rec_p = sp.Popen(args=REC_CMD % (f), shell=True,
-                     bufsize= -1, stdout=None, stderr=None)
+                     bufsize= -1, stdout=sys.stdout, stderr=sys.stderr)
     time.sleep(0.001)
     # play
     play_p = sp.Popen(args=PLAY_CMD, shell=True,
-                      bufsize= -1, stdout=None, stderr=None)
+                      bufsize= -1, stdout=sys.stdout, stderr=sys.stderr)
     play_p.wait()
 
     rec_p.kill()
@@ -105,7 +111,7 @@ def run_test(f):
 
 
 def analyze_test(f, ax):
-    test_data = np.zeros([MAX_SAMPLES, CHANS], dtype=np.int16)
+    test_data = np.zeros([max_samples, CHANS], dtype=np.int16)
 
     # read data from test file
     tf = open(REC_FILE % f, 'r+b', 1536)
@@ -113,7 +119,7 @@ def analyze_test(f, ax):
     started = False
     frame = tf.read(CHANS * 2)
     while not (frame == '' or
-               counter >= MAX_SAMPLES):
+               counter >= max_samples):
         samples = list(struct.unpack("<hhhhhh", frame))
         if (started):
             test_data[counter] = np.array(samples, dtype=np.int16)
@@ -142,7 +148,7 @@ def analyze_test(f, ax):
                                          NFFT=nfft, scale_by_freq=False,
                                          detrend='none'))
         spectra[c].run()
-        spectra[c].plot(norm=True,
+        spectra[c].plot(norm=False,
                         axes=ax,
                         label="chan %d" % (c),
                         linestyle='-',
@@ -164,8 +170,8 @@ def analyze_test(f, ax):
                    pad=2, labelsize='x-small')
     ax.grid(True, which='both', axis='both', color=[0.5, 0.5, 0.5, 0.5])
     ax.set_xscale("log")
-    ax.set_xlim(20, 2000)
-    ax.set_ylim(-96, 0)
+#    ax.set_xlim(20, 2000)
+#    ax.set_ylim(-96, 0)
     leg = ax.legend(loc="lower center", ncol=CHANS / 2, prop=font1)
     leg.get_frame().set_alpha(0.25)
 
