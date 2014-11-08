@@ -117,3 +117,5 @@ pytests/output/test-50-2.pcm
 pytests/output/test-50-3.pcm
 pytests/output/test-50-4.pcm
 pytests/output/test-79.pcm
+/.gitignore.orig
+/bootstrap.sh.orig
