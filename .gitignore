@@ -34,3 +34,11 @@ missing
 mkinstalldirs
 stamp-*
 .dirstamp
+.autotools
+.cproject
+.project
+.pydevproject
+.settings/
+doxygen/doxygen-warn.log
+doxygen/doxygen.conf.in.orig
+pytests/
