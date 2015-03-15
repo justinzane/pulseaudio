@@ -1166,6 +1166,7 @@ modlibexec_LTLIBRARIES += \
 		module-remap-sink.la \
 		module-remap-source.la \
 		module-ladspa-sink.la \
+		module-lfe-lp.la \
 		module-tunnel-sink-new.la \
 		module-tunnel-source-new.la \
 		module-tunnel-sink.la \
@@ -1451,6 +1452,7 @@ SYMDEF_FILES = \
 		module-remap-sink-symdef.h \
 		module-remap-source-symdef.h \
 		module-ladspa-sink-symdef.h \
+		module-lfe-lp-symdef.h \
 		module-equalizer-sink-symdef.h \
 		module-match-symdef.h \
 		module-tunnel-sink-new-symdef.h \
@@ -1712,6 +1714,10 @@ module_ladspa_sink_la_SOURCES = modules/module-ladspa-sink.c modules/ladspa.h
 module_ladspa_sink_la_CFLAGS = -DLADSPA_PATH=\"$(libdir)/ladspa:/usr/local/lib/ladspa:/usr/lib/ladspa:/usr/local/lib64/ladspa:/usr/lib64/ladspa\" $(AM_CFLAGS) $(SERVER_CFLAGS)
 module_ladspa_sink_la_LDFLAGS = $(MODULE_LDFLAGS)
 module_ladspa_sink_la_LIBADD = $(MODULE_LIBADD) $(LIBLTDL)
+
+module_lfe_lp_la_SOURCES = modules/module-lfe-lp.c
+module_lfe_lp_la_LDFLAGS = $(MODULE_LDFLAGS)
+module_lfe_lp_la_LIBADD = $(MODULE_LIBADD)
 
 if HAVE_DBUS
 module_ladspa_sink_la_CFLAGS += $(DBUS_CFLAGS)
